@@ -1,0 +1,766 @@
+"""A low-chatter external-sensor heat-pump thermostat."""
+
+from __future__ import annotations
+
+from datetime import timedelta
+import logging
+from time import time
+from typing import Any
+
+from homeassistant.components.climate import ClimateEntity
+from homeassistant.components.climate.const import ClimateEntityFeature, HVACAction, HVACMode
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import (
+    ATTR_TEMPERATURE,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    UnitOfTemperature,
+)
+from homeassistant.core import Context, Event, HomeAssistant, State, callback
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.restore_state import RestoreEntity
+
+from .const import (
+    CONF_COOL_TARGET,
+    CONF_HEAT_PUMP,
+    CONF_HEAT_TARGET,
+    CONF_HYSTERESIS,
+    CONF_MANUAL_OVERRIDE_MINUTES,
+    CONF_MIN_OFF_MINUTES,
+    CONF_MIN_RUN_MINUTES,
+    CONF_OPENING_SENSORS,
+    CONF_OPENING_OFF_DELAY_SECONDS,
+    CONF_OPENING_RESUME_DELAY_MINUTES,
+    CONF_SENSOR_STABLE_SECONDS,
+    CONF_SENSOR_LOSS_GRACE_SECONDS,
+    CONF_SETPOINT_COMPENSATION,
+    CONF_TEMPERATURE_SENSOR,
+    CONF_THERMOSTATS_TO_DISABLE,
+    DEFAULT_COOL_TARGET,
+    DEFAULT_HEAT_TARGET,
+    DEFAULT_HYSTERESIS,
+    DEFAULT_MANUAL_OVERRIDE_MINUTES,
+    DEFAULT_MIN_OFF_MINUTES,
+    DEFAULT_MIN_RUN_MINUTES,
+    DEFAULT_OPENING_OFF_DELAY_SECONDS,
+    DEFAULT_OPENING_RESUME_DELAY_MINUTES,
+    DEFAULT_SENSOR_STABLE_SECONDS,
+    DEFAULT_SENSOR_LOSS_GRACE_SECONDS,
+    DOMAIN,
+    PRESET_AUTO,
+    PRESET_MANUAL,
+)
+
+_LOGGER = logging.getLogger(__name__)
+_COMMAND_ECHO_SECONDS = 90
+_EVALUATION_SECONDS = 30
+_OPENING_STARTUP_GRACE_SECONDS = 90
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
+    """Set up one controller entity."""
+    entity = HeatPumpThermostat(hass, entry)
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entity
+    async_add_entities([entity])
+
+
+class HeatPumpThermostat(ClimateEntity, RestoreEntity):
+    """Control a heat pump from an external sensor without command chatter."""
+
+    _attr_has_entity_name = True
+    _attr_name = None
+    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL, HVACMode.HEAT_COOL]
+    _attr_preset_modes = [PRESET_AUTO, PRESET_MANUAL]
+    _attr_supported_features = (
+        ClimateEntityFeature.TARGET_TEMPERATURE
+        | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+        | ClimateEntityFeature.PRESET_MODE
+        | ClimateEntityFeature.TURN_OFF
+        | ClimateEntityFeature.TURN_ON
+    )
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_target_temperature_step = 0.5
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_unique_id = entry.entry_id
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": entry.title,
+            "manufacturer": "Custom",
+            "model": "External sensor heat-pump controller",
+        }
+        self._hvac_mode = HVACMode.OFF
+        self._active_mode = HVACMode.OFF
+        self._neutral_mode: HVACMode | None = None
+        self._preset_mode = PRESET_AUTO
+        self._heat_target = DEFAULT_HEAT_TARGET
+        self._cool_target = DEFAULT_COOL_TARGET
+        self._last_sensor_value: float | None = None
+        self._sensor_stable_since = time()
+        self._last_transition = time()
+        self._last_command = 0.0
+        self._command_guard_until = 0.0
+        self._manual_until = 0.0
+        self._sensor_unavailable_since: float | None = None
+        self._pending_mode: HVACMode | None = None
+        self._opening_open_since: float | None = None
+        self._opening_closed_since: float | None = None
+        self._opening_was_blocking = False
+        self._disabled_thermostats: dict[str, dict[str, Any]] = {}
+        self._command_count_mode = 0
+        self._command_count_temperature = 0
+        self._last_command_reason = "none"
+        self._command_context = Context()
+        self._observed_pump_target: float | None = None
+        self._startup_time = time()
+        self._started = False
+        self._load_config()
+
+    def _load_config(self) -> None:
+        cfg = {**self.entry.data, **self.entry.options}
+        self._heat_pump = cfg[CONF_HEAT_PUMP]
+        self._sensor = cfg[CONF_TEMPERATURE_SENSOR]
+        self._thermostats = list(cfg.get(CONF_THERMOSTATS_TO_DISABLE, []))
+        self._openings = list(cfg.get(CONF_OPENING_SENSORS, []))
+        self._opening_off_delay = float(
+            cfg.get(CONF_OPENING_OFF_DELAY_SECONDS, DEFAULT_OPENING_OFF_DELAY_SECONDS)
+        )
+        self._opening_resume_delay = float(
+            cfg.get(
+                CONF_OPENING_RESUME_DELAY_MINUTES,
+                DEFAULT_OPENING_RESUME_DELAY_MINUTES,
+            )
+        ) * 60
+        self._heat_target = float(cfg.get(CONF_HEAT_TARGET, self._heat_target))
+        self._cool_target = float(cfg.get(CONF_COOL_TARGET, self._cool_target))
+        self._hysteresis = float(cfg.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS))
+        self._min_run = float(cfg.get(CONF_MIN_RUN_MINUTES, DEFAULT_MIN_RUN_MINUTES)) * 60
+        self._min_off = float(cfg.get(CONF_MIN_OFF_MINUTES, DEFAULT_MIN_OFF_MINUTES)) * 60
+        self._stable_seconds = float(
+            cfg.get(CONF_SENSOR_STABLE_SECONDS, DEFAULT_SENSOR_STABLE_SECONDS)
+        )
+        self._sensor_loss_grace = float(
+            cfg.get(
+                CONF_SENSOR_LOSS_GRACE_SECONDS,
+                DEFAULT_SENSOR_LOSS_GRACE_SECONDS,
+            )
+        )
+        self._override_seconds = float(
+            cfg.get(CONF_MANUAL_OVERRIDE_MINUTES, DEFAULT_MANUAL_OVERRIDE_MINUTES)
+        ) * 60
+        self._compensate = bool(cfg.get(CONF_SETPOINT_COMPENSATION, True))
+
+    @property
+    def hvac_mode(self):
+        return self._hvac_mode
+
+    @property
+    def hvac_action(self):
+        if self._active_mode == HVACMode.HEAT:
+            return HVACAction.HEATING
+        if self._active_mode == HVACMode.COOL:
+            return HVACAction.COOLING
+        return HVACAction.OFF if self._hvac_mode == HVACMode.OFF else HVACAction.IDLE
+
+    @property
+    def preset_mode(self):
+        return self._preset_mode
+
+    @property
+    def current_temperature(self):
+        state = self.hass.states.get(self._sensor)
+        try:
+            return float(state.state) if state is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def target_temperature(self):
+        if self._hvac_mode == HVACMode.COOL:
+            return self._cool_target
+        return self._heat_target
+
+    @property
+    def target_temperature_low(self):
+        return self._heat_target
+
+    @property
+    def target_temperature_high(self):
+        return self._cool_target
+
+    @property
+    def extra_state_attributes(self):
+        remaining = max(0, int((self._manual_until - time()) / 60))
+        return {
+            "heat_pump": self._heat_pump,
+            "temperature_sensor": self._sensor,
+            "active_mode": self._active_mode,
+            "neutral_mode": self._neutral_mode,
+            "pending_mode": self._pending_mode,
+            "manual_override_remaining_minutes": remaining,
+            "mode_command_count": self._command_count_mode,
+            "temperature_command_count": self._command_count_temperature,
+            "last_command_reason": self._last_command_reason,
+            "thermostats_to_disable": self._thermostats,
+            "paused_thermostats": list(self._disabled_thermostats),
+            "opening_sensors": self._openings,
+            "opening_pause_active": self._opening_blocks_operation(),
+            "opening_pause_reason": self._opening_pause_reason(),
+            "opening_off_delay_seconds": self._opening_off_delay,
+            "opening_resume_delay_minutes": self._opening_resume_delay / 60,
+            "disabled_thermostat_snapshot": self._disabled_thermostats,
+            "last_transition_timestamp": self._last_transition,
+            "manual_override_until_timestamp": self._manual_until,
+            "sensor_stable_since_timestamp": self._sensor_stable_since,
+            "sensor_unavailable_since_timestamp": self._sensor_unavailable_since,
+            "opening_open_since_timestamp": self._opening_open_since,
+            "opening_closed_since_timestamp": self._opening_closed_since,
+            "opening_was_blocking": self._opening_was_blocking,
+            "sensor_available": self.current_temperature is not None,
+            "sensor_loss_grace_seconds": self._sensor_loss_grace,
+            "heat_target_saved": self._heat_target,
+            "cool_target_saved": self._cool_target,
+            "command_count_mode_saved": self._command_count_mode,
+            "command_count_temperature_saved": self._command_count_temperature,
+        }
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        old = await self.async_get_last_state()
+        if old is not None:
+            try:
+                self._hvac_mode = HVACMode(old.state)
+            except ValueError:
+                self._hvac_mode = HVACMode.OFF
+            attrs = old.attributes
+            self._heat_target = float(
+                attrs.get("heat_target_saved", attrs.get("target_temp_low", self._heat_target))
+            )
+            self._cool_target = float(
+                attrs.get("cool_target_saved", attrs.get("target_temp_high", self._cool_target))
+            )
+            try:
+                self._active_mode = HVACMode(attrs.get("active_mode", HVACMode.OFF))
+            except ValueError:
+                self._active_mode = HVACMode.OFF
+            neutral_mode = attrs.get("neutral_mode")
+            try:
+                self._neutral_mode = HVACMode(neutral_mode) if neutral_mode else None
+            except ValueError:
+                self._neutral_mode = None
+            restored_preset = attrs.get("preset_mode", PRESET_AUTO)
+            if restored_preset in self._attr_preset_modes:
+                self._preset_mode = restored_preset
+            pending_mode = attrs.get("pending_mode")
+            try:
+                self._pending_mode = HVACMode(pending_mode) if pending_mode else None
+            except ValueError:
+                self._pending_mode = None
+            snapshot = attrs.get("disabled_thermostat_snapshot", {})
+            if isinstance(snapshot, dict):
+                self._disabled_thermostats = snapshot
+            self._last_transition = float(
+                attrs.get("last_transition_timestamp", self._last_transition)
+            )
+            self._manual_until = float(
+                attrs.get("manual_override_until_timestamp", self._manual_until)
+            )
+            self._sensor_stable_since = float(
+                attrs.get("sensor_stable_since_timestamp", self._sensor_stable_since)
+            )
+            unavailable_since = attrs.get("sensor_unavailable_since_timestamp")
+            self._sensor_unavailable_since = (
+                float(unavailable_since) if unavailable_since is not None else None
+            )
+            open_since = attrs.get("opening_open_since_timestamp")
+            closed_since = attrs.get("opening_closed_since_timestamp")
+            self._opening_open_since = float(open_since) if open_since is not None else None
+            self._opening_closed_since = (
+                float(closed_since) if closed_since is not None else None
+            )
+            self._opening_was_blocking = bool(
+                attrs.get("opening_was_blocking", self._opening_was_blocking)
+            )
+            self._command_count_mode = int(
+                attrs.get("command_count_mode_saved", self._command_count_mode)
+            )
+            self._command_count_temperature = int(
+                attrs.get(
+                    "command_count_temperature_saved",
+                    self._command_count_temperature,
+                )
+            )
+
+        watched = [self._sensor, self._heat_pump, *self._openings]
+        self.async_on_remove(async_track_state_change_event(self.hass, watched, self._state_changed))
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass, self._periodic_update, timedelta(seconds=_EVALUATION_SECONDS)
+            )
+        )
+        self.entry.async_on_unload(self.entry.add_update_listener(self._entry_updated))
+        self._last_sensor_value = self.current_temperature
+        if self._opening_is_open() and self._opening_open_since is None:
+            self._opening_open_since = time()
+        pump_state = self.hass.states.get(self._heat_pump)
+        if pump_state is not None:
+            try:
+                physical_mode = HVACMode(pump_state.state)
+                if self._neutral_mode == physical_mode:
+                    self._active_mode = HVACMode.OFF
+                elif physical_mode in (HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL):
+                    self._active_mode = physical_mode
+            except ValueError:
+                pass
+            try:
+                self._observed_pump_target = float(pump_state.attributes.get("temperature"))
+            except (TypeError, ValueError):
+                self._observed_pump_target = None
+        self._started = True
+        self.async_write_ha_state()
+        # Deliberately do not evaluate or command hardware during entity startup.
+
+    async def _entry_updated(self, hass, entry) -> None:
+        self._load_config()
+        self.async_write_ha_state()
+
+    @callback
+    def _state_changed(self, event: Event) -> None:
+        entity_id = event.data.get("entity_id")
+        if entity_id == self._sensor:
+            value = self.current_temperature
+            if value != self._last_sensor_value:
+                self._last_sensor_value = value
+                self._sensor_stable_since = time()
+        if entity_id == self._heat_pump:
+            new_state = event.data.get("new_state")
+            self._detect_manual_change(new_state)
+            self.hass.async_create_task(self._sync_manual_thermostats(new_state))
+        if entity_id in self._openings:
+            if time() - self._startup_time >= _OPENING_STARTUP_GRACE_SECONDS:
+                self._update_opening_timers()
+            elif self._opening_is_open() and self._opening_open_since is None:
+                self._opening_open_since = time()
+        self.hass.async_create_task(self._evaluate("state_change"))
+
+    @callback
+    def _periodic_update(self, _now) -> None:
+        if time() - self._startup_time >= _OPENING_STARTUP_GRACE_SECONDS:
+            self._update_opening_timers()
+        self.hass.async_create_task(self._evaluate("periodic"))
+
+    def _detect_manual_change(self, new_state: State | None) -> None:
+        if new_state is None:
+            return
+        try:
+            new_target = float(new_state.attributes.get("temperature"))
+        except (TypeError, ValueError):
+            new_target = None
+        target_changed = (
+            new_target is not None
+            and self._observed_pump_target is not None
+            and abs(new_target - self._observed_pump_target) >= 1
+        )
+        self._observed_pump_target = new_target
+        # Physical climate entities commonly pass through OFF while their
+        # integration is still restoring after a Home Assistant restart. Do
+        # not interpret that transient startup state as a handheld-remote
+        # command.
+        if time() - self._startup_time < _OPENING_STARTUP_GRACE_SECONDS:
+            return
+        if time() <= self._command_guard_until:
+            return
+        if new_state.state not in {mode.value for mode in HVACMode}:
+            return
+        expected_mode = self._neutral_mode or self._active_mode
+        manual_mode = HVACMode(new_state.state)
+        if manual_mode == HVACMode.OFF and expected_mode != HVACMode.OFF:
+            # A physical OFF (for example from the handheld remote) is an
+            # explicit stop request, not a temporary setpoint override. Mirror
+            # it to the virtual thermostat so restore-state keeps the unit off
+            # until the user explicitly turns it on again.
+            self._hvac_mode = HVACMode.OFF
+            self._active_mode = HVACMode.OFF
+            self._neutral_mode = None
+            self._manual_until = 0
+            self._preset_mode = PRESET_AUTO
+            self._pending_mode = None
+            _LOGGER.info("%s: external heat-pump off mirrored to thermostat", self.entry.title)
+            return
+        if (
+            new_state.state != expected_mode.value or target_changed
+        ) and self._override_seconds > 0:
+            if manual_mode in (HVACMode.HEAT, HVACMode.COOL):
+                if self._hvac_mode == HVACMode.OFF:
+                    self._hvac_mode = manual_mode
+                self._active_mode = manual_mode
+            self._neutral_mode = None
+            self._manual_until = time() + self._override_seconds
+            self._preset_mode = PRESET_MANUAL
+            self._pending_mode = None
+            _LOGGER.info("%s: external heat-pump change started manual override", self.entry.title)
+
+    def _opening_is_open(self) -> bool:
+        return any(
+            (state := self.hass.states.get(entity_id)) is not None and state.state == STATE_ON
+            for entity_id in self._openings
+        )
+
+    def _update_opening_timers(self) -> None:
+        """Track the aggregate open/closed period for the configured zone."""
+        now = time()
+        if self._opening_is_open():
+            if self._opening_open_since is None:
+                self._opening_open_since = now
+            self._opening_closed_since = None
+            return
+        if self._opening_open_since is not None:
+            open_duration = now - self._opening_open_since
+            if open_duration >= self._opening_off_delay:
+                self._opening_was_blocking = True
+                self._opening_closed_since = now
+            self._opening_open_since = None
+
+    def _opening_blocks_operation(self) -> bool:
+        """Return whether an opening currently enforces an HVAC pause."""
+        now = time()
+        if self._opening_is_open():
+            if self._opening_open_since is None:
+                self._opening_open_since = now
+            blocked = now - self._opening_open_since >= self._opening_off_delay
+            if blocked:
+                self._opening_was_blocking = True
+            return blocked
+        if not self._opening_was_blocking or self._opening_closed_since is None:
+            return False
+        if now - self._opening_closed_since < self._opening_resume_delay:
+            return True
+        self._opening_was_blocking = False
+        self._opening_closed_since = None
+        return False
+
+    def _opening_pause_reason(self) -> str:
+        if self._opening_is_open():
+            return "open" if self._opening_blocks_operation() else "waiting_to_stop"
+        if self._opening_blocks_operation():
+            return "waiting_to_resume"
+        return "none"
+
+    async def _sync_manual_thermostats(self, pump_state: State | None) -> None:
+        """Apply radiator coordination even when the physical remote was used."""
+        if pump_state is None:
+            return
+        if self._neutral_mode is not None and pump_state.state == self._neutral_mode.value:
+            await self._restore_thermostats()
+        elif pump_state.state in (HVACMode.HEAT, HVACMode.COOL):
+            await self._disable_thermostats()
+        elif pump_state.state == HVACMode.OFF:
+            await self._restore_thermostats()
+
+    def _desired_mode(self, temperature: float) -> HVACMode:
+        if self._hvac_mode == HVACMode.OFF or self._opening_blocks_operation():
+            return HVACMode.OFF
+        heat_on = temperature <= self._heat_target - self._hysteresis
+        heat_off = temperature >= self._heat_target + self._hysteresis
+        cool_on = temperature >= self._cool_target + self._hysteresis
+        cool_off = temperature <= self._cool_target - self._hysteresis
+
+        if self._active_mode == HVACMode.HEAT and not heat_off:
+            return HVACMode.HEAT
+        if self._active_mode == HVACMode.COOL and not cool_off:
+            return HVACMode.COOL
+        if self._hvac_mode in (HVACMode.HEAT, HVACMode.HEAT_COOL) and heat_on:
+            return HVACMode.HEAT
+        if self._hvac_mode in (HVACMode.COOL, HVACMode.HEAT_COOL) and cool_on:
+            return HVACMode.COOL
+        return HVACMode.OFF
+
+    async def _evaluate(self, reason: str) -> None:
+        if not self._started:
+            return
+        now = time()
+        opening_pause = self._opening_blocks_operation()
+        if opening_pause and self._manual_until > now:
+            # Openings are a safety/energy override. Resume automatic control,
+            # rather than restarting an unknown remote-control mode later.
+            self._manual_until = 0
+            self._preset_mode = PRESET_AUTO
+        if self._manual_until > now:
+            self.async_write_ha_state()
+            return
+        if self._preset_mode == PRESET_MANUAL:
+            self._preset_mode = PRESET_AUTO
+        temperature = self.current_temperature
+        if temperature is None:
+            if self._sensor_unavailable_since is None:
+                self._sensor_unavailable_since = now
+                self.async_write_ha_state()
+                return
+            if now - self._sensor_unavailable_since < self._sensor_loss_grace:
+                self.async_write_ha_state()
+                return
+            pump = self.hass.states.get(self._heat_pump)
+            pump_running = pump is not None and pump.state in (
+                HVACMode.HEAT.value,
+                HVACMode.COOL.value,
+            )
+            if self._hvac_mode == HVACMode.OFF:
+                await self._apply_mode(HVACMode.OFF, "temperature_sensor_unavailable")
+            elif pump_running or self._active_mode != HVACMode.OFF:
+                await self._apply_neutral("temperature_sensor_unavailable")
+            else:
+                await self._restore_thermostats()
+                self.async_write_ha_state()
+            return
+        if self._sensor_unavailable_since is not None:
+            self._sensor_unavailable_since = None
+            self._sensor_stable_since = now
+        desired = self._desired_mode(temperature)
+        if desired == self._active_mode:
+            if desired == HVACMode.OFF:
+                if self._hvac_mode == HVACMode.OFF and self._neutral_mode is not None:
+                    await self._apply_mode(HVACMode.OFF, reason)
+                    return
+                if self._hvac_mode != HVACMode.OFF and self._neutral_mode is None:
+                    await self._apply_neutral(reason)
+                    return
+                await self._restore_thermostats()
+            else:
+                await self._disable_thermostats()
+            self.async_write_ha_state()
+            return
+        # A deliberate setpoint reduction must feel immediate. Holding the
+        # previous heat/cool demand until minimum runtime expires can keep the
+        # room heating after the user has explicitly removed that demand.
+        # Minimum *off* time still protects the compressor from restarting
+        # again too quickly.
+        user_removed_demand = reason in ("target_change", "resume_auto") and desired == HVACMode.OFF
+        safety_off = (
+            opening_pause
+            or self._hvac_mode == HVACMode.OFF
+            or user_removed_demand
+        )
+        elapsed = now - self._last_transition
+        if self._active_mode != HVACMode.OFF and not safety_off and elapsed < self._min_run:
+            return
+        if desired != HVACMode.OFF:
+            if now - self._sensor_stable_since < self._stable_seconds:
+                return
+            if self._active_mode == HVACMode.OFF and elapsed < self._min_off:
+                self._pending_mode = desired
+                return
+            if self._active_mode != HVACMode.OFF:
+                self._pending_mode = desired
+                await self._apply_mode(HVACMode.OFF, "mode_change_pause")
+                return
+            await self._prepare_setpoint(desired)
+        if desired == HVACMode.OFF and self._hvac_mode != HVACMode.OFF:
+            await self._apply_neutral("opening_pause" if opening_pause else reason)
+        else:
+            await self._apply_mode(desired, "opening_pause" if opening_pause else reason)
+
+    async def _apply_neutral(self, reason: str) -> None:
+        """Stop demand without power-cycling the physical heat pump."""
+        pump = self.hass.states.get(self._heat_pump)
+        if pump is None:
+            return
+        try:
+            physical_mode = HVACMode(pump.state)
+        except ValueError:
+            physical_mode = HVACMode.OFF
+        if self._active_mode in (HVACMode.HEAT, HVACMode.COOL):
+            neutral_mode = self._active_mode
+        elif physical_mode in (HVACMode.HEAT, HVACMode.COOL):
+            neutral_mode = physical_mode
+        else:
+            neutral_mode = HVACMode.COOL if self._hvac_mode == HVACMode.COOL else HVACMode.HEAT
+
+        neutral_target = float(
+            pump.attributes.get("min_temp", 16)
+            if neutral_mode == HVACMode.HEAT
+            else pump.attributes.get("max_temp", 32)
+        )
+        current_target = pump.attributes.get("temperature")
+        try:
+            target_matches = abs(float(current_target) - neutral_target) < 1
+        except (TypeError, ValueError):
+            target_matches = False
+        self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+        if physical_mode != neutral_mode:
+            await self.hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": self._heat_pump, "hvac_mode": neutral_mode.value},
+                blocking=True,
+                context=self._command_context,
+            )
+            self._command_count_mode += 1
+            self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+        if not target_matches:
+            await self.hass.services.async_call(
+                "climate",
+                "set_temperature",
+                {"entity_id": self._heat_pump, ATTR_TEMPERATURE: neutral_target},
+                blocking=True,
+                context=self._command_context,
+            )
+            self._command_count_temperature += 1
+            self._observed_pump_target = neutral_target
+            self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+        self._last_command = time()
+        self._last_command_reason = reason
+        self._neutral_mode = neutral_mode
+        self._active_mode = HVACMode.OFF
+        self._pending_mode = None
+        self._last_transition = time()
+        await self._restore_thermostats()
+        self.async_write_ha_state()
+
+    async def _prepare_setpoint(self, mode: HVACMode) -> None:
+        pump = self.hass.states.get(self._heat_pump)
+        if pump is None:
+            return
+        self._neutral_mode = None
+        desired = self._heat_target if mode == HVACMode.HEAT else self._cool_target
+        if self._compensate:
+            internal = pump.attributes.get("current_temperature")
+            external = self.current_temperature
+            try:
+                desired += float(internal) - float(external)
+            except (TypeError, ValueError):
+                pass
+        min_temp = float(pump.attributes.get("min_temp", 16))
+        max_temp = float(pump.attributes.get("max_temp", 32))
+        desired = float(round(max(min_temp, min(max_temp, desired))))
+        current = pump.attributes.get("temperature")
+        try:
+            if abs(float(current) - desired) < 1:
+                return
+        except (TypeError, ValueError):
+            pass
+        self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+        await self.hass.services.async_call(
+            "climate",
+            "set_temperature",
+            {"entity_id": self._heat_pump, ATTR_TEMPERATURE: desired},
+            blocking=True,
+            context=self._command_context,
+        )
+        self._command_count_temperature += 1
+        self._observed_pump_target = desired
+        self._last_command = time()
+        self._last_command_reason = f"prepare_{mode.value}"
+
+    async def _apply_mode(self, mode: HVACMode, reason: str) -> None:
+        self._neutral_mode = None
+        pump = self.hass.states.get(self._heat_pump)
+        if pump is not None and pump.state == mode.value:
+            self._active_mode = mode
+            self._last_transition = time()
+            if mode == HVACMode.OFF:
+                await self._restore_thermostats()
+            else:
+                await self._disable_thermostats()
+            return
+        self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+        await self.hass.services.async_call(
+            "climate",
+            "set_hvac_mode",
+            {"entity_id": self._heat_pump, "hvac_mode": mode.value},
+            blocking=True,
+            context=self._command_context,
+        )
+        self._command_count_mode += 1
+        self._last_command = time()
+        self._last_command_reason = reason
+        self._active_mode = mode
+        self._last_transition = time()
+        if mode == HVACMode.OFF:
+            await self._restore_thermostats()
+        else:
+            await self._disable_thermostats()
+        self.async_write_ha_state()
+
+    async def _disable_thermostats(self) -> None:
+        for entity_id in self._thermostats:
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in (
+                HVACMode.OFF,
+                STATE_UNAVAILABLE,
+                STATE_UNKNOWN,
+            ):
+                continue
+            self._disabled_thermostats.setdefault(
+                entity_id,
+                {"hvac_mode": state.state, "temperature": state.attributes.get("temperature")},
+            )
+            await self.hass.services.async_call(
+                "climate", "set_hvac_mode", {"entity_id": entity_id, "hvac_mode": "off"}, blocking=True
+            )
+
+    async def _restore_thermostats(self) -> None:
+        saved = dict(self._disabled_thermostats)
+        remaining: dict[str, dict[str, Any]] = {}
+        for entity_id, values in saved.items():
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                # Config-entry climate entities often become available later
+                # than this controller during startup. Keep the snapshot and
+                # retry on the next evaluation instead of losing it.
+                remaining[entity_id] = values
+                continue
+            if state.state != HVACMode.OFF:
+                continue
+            await self.hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": entity_id, "hvac_mode": values["hvac_mode"]},
+                blocking=True,
+            )
+            if values.get("temperature") is not None:
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_temperature",
+                    {"entity_id": entity_id, ATTR_TEMPERATURE: values["temperature"]},
+                    blocking=True,
+                )
+        self._disabled_thermostats = remaining
+        self.async_write_ha_state()
+
+    async def async_set_hvac_mode(self, hvac_mode) -> None:
+        self._hvac_mode = HVACMode(hvac_mode)
+        if self._hvac_mode == HVACMode.OFF:
+            self._manual_until = 0
+        self.async_write_ha_state()
+        await self._evaluate("thermostat_mode")
+
+    async def async_set_temperature(self, **kwargs) -> None:
+        if kwargs.get("target_temp_low") is not None:
+            self._heat_target = float(kwargs["target_temp_low"])
+        if kwargs.get("target_temp_high") is not None:
+            self._cool_target = float(kwargs["target_temp_high"])
+        if kwargs.get(ATTR_TEMPERATURE) is not None:
+            if self._hvac_mode == HVACMode.COOL:
+                self._cool_target = float(kwargs[ATTR_TEMPERATURE])
+            else:
+                self._heat_target = float(kwargs[ATTR_TEMPERATURE])
+        self.async_write_ha_state()
+        await self._evaluate("target_change")
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        self._preset_mode = preset_mode
+        if preset_mode == PRESET_MANUAL:
+            self._manual_until = time() + self._override_seconds
+        else:
+            self._manual_until = 0
+            await self._evaluate("resume_auto")
+        self.async_write_ha_state()
+
+    async def async_turn_off(self) -> None:
+        await self.async_set_hvac_mode(HVACMode.OFF)
+
+    async def async_turn_on(self) -> None:
+        await self.async_set_hvac_mode(HVACMode.HEAT_COOL)

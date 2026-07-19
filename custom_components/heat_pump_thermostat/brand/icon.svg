@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Heat Pump Thermostat">
+  <defs>
+    <linearGradient id="bg" x1="30" y1="20" x2="226" y2="236" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#13B9E6"/>
+      <stop offset="1" stop-color="#1769E0"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="58" fill="url(#bg)"/>
+  <path d="M61 69c0-13 10-23 23-23h88c13 0 23 10 23 23v68c0 13-10 23-23 23H84c-13 0-23-10-23-23V69Z" fill="#fff"/>
+  <path d="M80 87h96" stroke="#1769E0" stroke-width="11" stroke-linecap="round"/>
+  <path d="M91 118c17 11 57 11 74 0" fill="none" stroke="#13B9E6" stroke-width="11" stroke-linecap="round"/>
+  <path d="M91 184v22M128 178v28M165 184v22" stroke="#fff" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="181" cy="62" r="8" fill="#13B9E6"/>
+</svg>

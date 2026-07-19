@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 256" role="img" aria-label="Heat Pump Thermostat">
+  <rect width="760" height="256" rx="48" fill="#0B1628"/>
+  <g transform="translate(20)">
+    <rect x="20" y="20" width="216" height="216" rx="50" fill="#1769E0"/>
+    <path d="M72 70c0-11 9-20 20-20h72c11 0 20 9 20 20v59c0 11-9 20-20 20H92c-11 0-20-9-20-20V70Z" fill="#fff"/>
+    <path d="M89 85h78" stroke="#1769E0" stroke-width="10" stroke-linecap="round"/>
+    <path d="M98 112c14 10 46 10 60 0" fill="none" stroke="#13B9E6" stroke-width="10" stroke-linecap="round"/>
+    <path d="M98 173v27M128 166v34M158 173v27" stroke="#fff" stroke-width="11" stroke-linecap="round"/>
+  </g>
+  <text x="285" y="113" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700">Heat Pump</text>
+  <text x="285" y="171" fill="#61D6F2" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="700">Thermostat</text>
+</svg>

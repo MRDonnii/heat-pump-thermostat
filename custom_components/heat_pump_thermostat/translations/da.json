@@ -1,0 +1,63 @@
+{
+  "title": "Varmepumpe-termostat",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Opsæt varmepumpe-termostat",
+        "description": "Opretter en ny termostat styret af en ekstern rumføler. Der sendes ingen kommando til varmepumpen under opsætningen.",
+        "data": {
+          "name": "Navn",
+          "heat_pump": "Varmepumpe",
+          "temperature_sensor": "Ekstern temperaturføler",
+          "thermostats_to_disable": "Termostater der skal slukkes, mens varmepumpen kører",
+          "opening_sensors": "Vindues- og dørsensorer",
+          "opening_off_delay_seconds": "Forsinkelse før stop ved åbent vindue/dør (sekunder)",
+          "opening_resume_delay_minutes": "Forsinkelse før genstart efter alle vinduer/døre er lukket (minutter)",
+          "heat_target": "Standard varmemål",
+          "cool_target": "Standard kølemål",
+          "hysteresis": "Hysterese",
+          "min_run_minutes": "Mindste driftstid (minutter)",
+          "min_off_minutes": "Mindste pausetid (minutter)",
+          "sensor_stable_seconds": "Følerens stabilitetstid (sekunder)",
+          "sensor_loss_grace_seconds": "Forsinkelse før stop ved mistet føler (sekunder)",
+          "manual_override_minutes": "Manuel fjernbetjeningsperiode (minutter)",
+          "setpoint_compensation": "Kompenser varmepumpens setpunkt efter den eksterne føler"
+        }
+      }
+    },
+    "error": {
+      "cool_must_exceed_heat": "Kølemålet skal være højere end varmemålet."
+    },
+    "abort": {
+      "already_configured": "Denne varmepumpe er allerede konfigureret."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Indstillinger for varmepumpe-termostat",
+        "data": {
+          "name": "Navn",
+          "heat_pump": "Varmepumpe",
+          "temperature_sensor": "Ekstern temperaturføler",
+          "thermostats_to_disable": "Termostater der skal slukkes, mens varmepumpen kører",
+          "opening_sensors": "Vindues- og dørsensorer",
+          "opening_off_delay_seconds": "Forsinkelse før stop ved åbent vindue/dør (sekunder)",
+          "opening_resume_delay_minutes": "Forsinkelse før genstart efter alle vinduer/døre er lukket (minutter)",
+          "heat_target": "Standard varmemål",
+          "cool_target": "Standard kølemål",
+          "hysteresis": "Hysterese",
+          "min_run_minutes": "Mindste driftstid (minutter)",
+          "min_off_minutes": "Mindste pausetid (minutter)",
+          "sensor_stable_seconds": "Følerens stabilitetstid (sekunder)",
+          "sensor_loss_grace_seconds": "Forsinkelse før stop ved mistet føler (sekunder)",
+          "manual_override_minutes": "Manuel fjernbetjeningsperiode (minutter)",
+          "setpoint_compensation": "Kompenser varmepumpens setpunkt efter den eksterne føler"
+        }
+      }
+    },
+    "error": {
+      "cool_must_exceed_heat": "Kølemålet skal være højere end varmemålet."
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "domain": "heat_pump_thermostat",
+  "name": "Heat Pump Thermostat",
+  "codeowners": ["@MRDonnii"],
+  "config_flow": true,
+  "documentation": "https://github.com/MRDonnii/heat-pump-thermostat",
+  "issue_tracker": "https://github.com/MRDonnii/heat-pump-thermostat/issues",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "requirements": [],
+  "version": "0.1.0"
+}
