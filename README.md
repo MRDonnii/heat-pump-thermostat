@@ -12,8 +12,8 @@ A Home Assistant custom integration that creates a virtual climate entity for an
 - Applies configurable hysteresis, minimum run time, and minimum off time.
 - Keeps the heat pump powered in a neutral mode when there is no demand instead of repeatedly switching it off and on.
 - Optional setpoint compensation for heat pumps that only expose their own internal temperature.
-- Pauses operation after configured doors or windows have remained open for a chosen delay.
-- Resumes only after the configured closing delay.
+- Two-stage door/window handling: after an opening has been open for a while (default 5 min) the heat pump is turned down to the lowest target the unit really accepts; after a longer time (default 20 min) it is switched off completely. Open time accumulates across short openings, a brief re-opening never cancels the pause, and normal control resumes only after every opening has stayed closed for the resume delay (default 10 min). A unit that is already off is never switched on by an opening.
+- Confirms every turn-down target: some units (for example Qlima via Tuya) silently ignore their advertised minimum in heat mode, so a rejected target is retried one degree higher and the accepted value is remembered.
 - Handles temporary temperature-sensor loss with a configurable grace period.
 - Detects manual remote-control changes without continuously overwriting them.
 - Treats a physical `off` command as a persistent stop: the virtual thermostat stays off until the user explicitly turns it on again.
@@ -48,8 +48,9 @@ Each integration entry controls one physical heat pump.
 | Temperature sensor | External room-temperature entity. |
 | Thermostats to disable | Optional climate entities to pause during active heating or cooling. Leave empty to disable this behavior. |
 | Opening sensors | Door and window sensors that can pause the heat pump. |
-| Opening delay | How long an opening must remain open before pausing. |
-| Resume delay | How long all openings must remain closed before resuming. |
+| Turn-down delay | Minutes an opening must be open (accumulated) before the heat pump is turned down to its minimum target. Default 5. |
+| Switch-off delay | Minutes an opening must be open (accumulated) before the heat pump is switched off completely. Default 20. |
+| Resume delay | Minutes all openings must stay closed in a row before normal control resumes. Default 10. |
 | Heat and cool targets | Desired room-temperature setpoints. |
 | Hysteresis | Temperature margin used to prevent rapid changes. |
 | Minimum run/off times | Compressor-friendly transition limits. |
@@ -74,3 +75,15 @@ Report problems and feature requests in [GitHub Issues](https://github.com/MRDon
 ## License
 
 MIT
+
+## Changelog
+
+### 0.2.0
+- Two-stage opening handling (turn down after 5 min, switch off after 20 min, resume after 10 min closed) replaces the single pause delay. The old seconds-based delay option is no longer used.
+- A brief re-opening during the resume wait no longer cancels the pause.
+- Turn-down targets are confirmed against the unit's reported target; rejected values are retried one degree towards comfort and learned (`min_heat_target_accepted` / `max_cool_target_accepted`).
+- New attributes: `opening_stage`, `opening_open_minutes`, `opening_min_delay_minutes`, `opening_off_delay_minutes`.
+
+### 0.1.1
+- Targets, options and restored state use whole degrees.
+

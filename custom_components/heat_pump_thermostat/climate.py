@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 import logging
 import math
@@ -31,7 +32,8 @@ from .const import (
     CONF_MIN_OFF_MINUTES,
     CONF_MIN_RUN_MINUTES,
     CONF_OPENING_SENSORS,
-    CONF_OPENING_OFF_DELAY_SECONDS,
+    CONF_OPENING_MIN_DELAY_MINUTES,
+    CONF_OPENING_OFF_DELAY_MINUTES,
     CONF_OPENING_RESUME_DELAY_MINUTES,
     CONF_SENSOR_STABLE_SECONDS,
     CONF_SENSOR_LOSS_GRACE_SECONDS,
@@ -44,11 +46,15 @@ from .const import (
     DEFAULT_MANUAL_OVERRIDE_MINUTES,
     DEFAULT_MIN_OFF_MINUTES,
     DEFAULT_MIN_RUN_MINUTES,
-    DEFAULT_OPENING_OFF_DELAY_SECONDS,
+    DEFAULT_OPENING_MIN_DELAY_MINUTES,
+    DEFAULT_OPENING_OFF_DELAY_MINUTES,
     DEFAULT_OPENING_RESUME_DELAY_MINUTES,
     DEFAULT_SENSOR_STABLE_SECONDS,
     DEFAULT_SENSOR_LOSS_GRACE_SECONDS,
     DOMAIN,
+    OPENING_STAGE_MIN,
+    OPENING_STAGE_NONE,
+    OPENING_STAGE_OFF,
     PRESET_AUTO,
     PRESET_MANUAL,
 )
@@ -57,6 +63,10 @@ _LOGGER = logging.getLogger(__name__)
 _COMMAND_ECHO_SECONDS = 90
 _EVALUATION_SECONDS = 30
 _OPENING_STARTUP_GRACE_SECONDS = 90
+# How long to wait for the heat pump to report a new target before treating it
+# as rejected. Some units silently ignore their advertised minimum/maximum.
+_TARGET_CONFIRM_SECONDS = 10
+_TARGET_CONFIRM_ATTEMPTS = 4
 
 
 def _whole(value: Any) -> float:
@@ -112,9 +122,14 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         self._manual_until = 0.0
         self._sensor_unavailable_since: float | None = None
         self._pending_mode: HVACMode | None = None
+        self._opening_episode_start: float | None = None
+        self._opening_open_accum = 0.0
         self._opening_open_since: float | None = None
         self._opening_closed_since: float | None = None
-        self._opening_was_blocking = False
+        self._opening_stage = OPENING_STAGE_NONE
+        self._min_heat_accepted: float | None = None
+        self._max_cool_accepted: float | None = None
+        self._eval_lock = asyncio.Lock()
         self._disabled_thermostats: dict[str, dict[str, Any]] = {}
         self._command_count_mode = 0
         self._command_count_temperature = 0
@@ -131,8 +146,13 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         self._sensor = cfg[CONF_TEMPERATURE_SENSOR]
         self._thermostats = list(cfg.get(CONF_THERMOSTATS_TO_DISABLE, []))
         self._openings = list(cfg.get(CONF_OPENING_SENSORS, []))
-        self._opening_off_delay = float(
-            cfg.get(CONF_OPENING_OFF_DELAY_SECONDS, DEFAULT_OPENING_OFF_DELAY_SECONDS)
+        self._opening_min_delay = float(
+            cfg.get(CONF_OPENING_MIN_DELAY_MINUTES, DEFAULT_OPENING_MIN_DELAY_MINUTES)
+        ) * 60
+        self._opening_off_delay = max(
+            self._opening_min_delay,
+            float(cfg.get(CONF_OPENING_OFF_DELAY_MINUTES, DEFAULT_OPENING_OFF_DELAY_MINUTES))
+            * 60,
         )
         self._opening_resume_delay = float(
             cfg.get(
@@ -213,18 +233,24 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             "thermostats_to_disable": self._thermostats,
             "paused_thermostats": list(self._disabled_thermostats),
             "opening_sensors": self._openings,
-            "opening_pause_active": self._opening_blocks_operation(),
+            "opening_stage": self._opening_stage,
+            "opening_pause_active": self._opening_stage != OPENING_STAGE_NONE,
             "opening_pause_reason": self._opening_pause_reason(),
-            "opening_off_delay_seconds": self._opening_off_delay,
+            "opening_open_minutes": round(self._opening_open_total() / 60, 1),
+            "opening_min_delay_minutes": self._opening_min_delay / 60,
+            "opening_off_delay_minutes": self._opening_off_delay / 60,
             "opening_resume_delay_minutes": self._opening_resume_delay / 60,
+            "min_heat_target_accepted": self._min_heat_accepted,
+            "max_cool_target_accepted": self._max_cool_accepted,
             "disabled_thermostat_snapshot": self._disabled_thermostats,
             "last_transition_timestamp": self._last_transition,
             "manual_override_until_timestamp": self._manual_until,
             "sensor_stable_since_timestamp": self._sensor_stable_since,
             "sensor_unavailable_since_timestamp": self._sensor_unavailable_since,
+            "opening_episode_start_timestamp": self._opening_episode_start,
+            "opening_open_accum_seconds": self._opening_open_accum,
             "opening_open_since_timestamp": self._opening_open_since,
             "opening_closed_since_timestamp": self._opening_closed_since,
-            "opening_was_blocking": self._opening_was_blocking,
             "sensor_available": self.current_temperature is not None,
             "sensor_loss_grace_seconds": self._sensor_loss_grace,
             "heat_target_saved": self._heat_target,
@@ -283,13 +309,32 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             )
             open_since = attrs.get("opening_open_since_timestamp")
             closed_since = attrs.get("opening_closed_since_timestamp")
+            episode_start = attrs.get("opening_episode_start_timestamp")
             self._opening_open_since = float(open_since) if open_since is not None else None
             self._opening_closed_since = (
                 float(closed_since) if closed_since is not None else None
             )
-            self._opening_was_blocking = bool(
-                attrs.get("opening_was_blocking", self._opening_was_blocking)
+            self._opening_episode_start = (
+                float(episode_start) if episode_start is not None else None
             )
+            self._opening_open_accum = float(attrs.get("opening_open_accum_seconds") or 0.0)
+            stage = attrs.get("opening_stage", OPENING_STAGE_NONE)
+            if stage in (OPENING_STAGE_NONE, OPENING_STAGE_MIN, OPENING_STAGE_OFF):
+                self._opening_stage = stage
+            if self._opening_episode_start is None:
+                # Upgrading from <= 0.1.x or no episode in progress.
+                self._opening_stage = OPENING_STAGE_NONE
+                self._opening_open_since = None
+                self._opening_closed_since = None
+                self._opening_open_accum = 0.0
+            for key, attr in (
+                ("_min_heat_accepted", "min_heat_target_accepted"),
+                ("_max_cool_accepted", "max_cool_target_accepted"),
+            ):
+                try:
+                    setattr(self, key, float(attrs[attr]) if attrs.get(attr) is not None else None)
+                except (TypeError, ValueError):
+                    setattr(self, key, None)
             self._command_count_mode = int(
                 attrs.get("command_count_mode_saved", self._command_count_mode)
             )
@@ -309,8 +354,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         )
         self.entry.async_on_unload(self.entry.add_update_listener(self._entry_updated))
         self._last_sensor_value = self.current_temperature
-        if self._opening_is_open() and self._opening_open_since is None:
-            self._opening_open_since = time()
+        self._update_opening()
         pump_state = self.hass.states.get(self._heat_pump)
         if pump_state is not None:
             try:
@@ -346,16 +390,12 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             self._detect_manual_change(new_state)
             self.hass.async_create_task(self._sync_manual_thermostats(new_state))
         if entity_id in self._openings:
-            if time() - self._startup_time >= _OPENING_STARTUP_GRACE_SECONDS:
-                self._update_opening_timers()
-            elif self._opening_is_open() and self._opening_open_since is None:
-                self._opening_open_since = time()
+            self._update_opening()
         self.hass.async_create_task(self._evaluate("state_change"))
 
     @callback
     def _periodic_update(self, _now) -> None:
-        if time() - self._startup_time >= _OPENING_STARTUP_GRACE_SECONDS:
-            self._update_opening_timers()
+        self._update_opening()
         self.hass.async_create_task(self._evaluate("periodic"))
 
     def _detect_manual_change(self, new_state: State | None) -> None:
@@ -383,6 +423,10 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             return
         expected_mode = self._neutral_mode or self._active_mode
         manual_mode = HVACMode(new_state.state)
+        if self._opening_stage == OPENING_STAGE_OFF and manual_mode == HVACMode.OFF:
+            # We switched the unit off because a door/window stayed open. A
+            # late OFF echo must not be mistaken for a remote-control stop.
+            return
         if manual_mode == HVACMode.OFF and expected_mode != HVACMode.OFF:
             # A physical OFF (for example from the handheld remote) is an
             # explicit stop request, not a temporary setpoint override. Mirror
@@ -415,44 +459,69 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             for entity_id in self._openings
         )
 
-    def _update_opening_timers(self) -> None:
-        """Track the aggregate open/closed period for the configured zone."""
+    def _opening_open_total(self) -> float:
+        """Seconds an opening has been open during the current episode."""
+        total = self._opening_open_accum
+        if self._opening_open_since is not None:
+            total += time() - self._opening_open_since
+        return total
+
+    def _update_opening(self) -> str:
+        """Advance the door/window state machine and return the current stage.
+
+        An episode starts when any configured opening opens. Open time is
+        accumulated within the episode: after the "minimum" delay the heat pump
+        is turned down to its lowest accepted target, after the "off" delay it
+        is switched off completely. The stage never steps back while the
+        episode lasts; the episode only ends once every opening has stayed
+        closed for the resume delay.
+        """
         now = time()
         if self._opening_is_open():
+            if self._opening_episode_start is None:
+                self._opening_episode_start = now
+                self._opening_open_accum = 0.0
+                self._opening_stage = OPENING_STAGE_NONE
             if self._opening_open_since is None:
                 self._opening_open_since = now
             self._opening_closed_since = None
-            return
-        if self._opening_open_since is not None:
-            open_duration = now - self._opening_open_since
-            if open_duration >= self._opening_off_delay:
-                self._opening_was_blocking = True
-                self._opening_closed_since = now
-            self._opening_open_since = None
-
-    def _opening_blocks_operation(self) -> bool:
-        """Return whether an opening currently enforces an HVAC pause."""
-        now = time()
-        if self._opening_is_open():
-            if self._opening_open_since is None:
-                self._opening_open_since = now
-            blocked = now - self._opening_open_since >= self._opening_off_delay
-            if blocked:
-                self._opening_was_blocking = True
-            return blocked
-        if not self._opening_was_blocking or self._opening_closed_since is None:
-            return False
-        if now - self._opening_closed_since < self._opening_resume_delay:
-            return True
-        self._opening_was_blocking = False
-        self._opening_closed_since = None
-        return False
+        else:
+            if self._opening_open_since is not None:
+                self._opening_open_accum += now - self._opening_open_since
+                self._opening_open_since = None
+            if self._opening_episode_start is not None:
+                if self._opening_closed_since is None:
+                    self._opening_closed_since = now
+                elif now - self._opening_closed_since >= self._opening_resume_delay:
+                    if self._opening_stage != OPENING_STAGE_NONE:
+                        _LOGGER.info(
+                            "%s: openings closed for %.0f min, resuming",
+                            self.entry.title,
+                            self._opening_resume_delay / 60,
+                        )
+                    self._opening_episode_start = None
+                    self._opening_closed_since = None
+                    self._opening_open_accum = 0.0
+                    self._opening_stage = OPENING_STAGE_NONE
+        if self._opening_episode_start is not None:
+            open_total = self._opening_open_total()
+            if open_total >= self._opening_off_delay:
+                if self._opening_stage != OPENING_STAGE_OFF:
+                    _LOGGER.info("%s: opening open %.0f min, switching off", self.entry.title, open_total / 60)
+                self._opening_stage = OPENING_STAGE_OFF
+            elif open_total >= self._opening_min_delay and self._opening_stage == OPENING_STAGE_NONE:
+                _LOGGER.info("%s: opening open %.0f min, turning down", self.entry.title, open_total / 60)
+                self._opening_stage = OPENING_STAGE_MIN
+        return self._opening_stage
 
     def _opening_pause_reason(self) -> str:
-        if self._opening_is_open():
-            return "open" if self._opening_blocks_operation() else "waiting_to_stop"
-        if self._opening_blocks_operation():
-            return "waiting_to_resume"
+        is_open = self._opening_is_open()
+        if self._opening_stage == OPENING_STAGE_OFF:
+            return "off" if is_open else "waiting_to_resume"
+        if self._opening_stage == OPENING_STAGE_MIN:
+            return "reduced" if is_open else "waiting_to_resume"
+        if is_open:
+            return "waiting_to_reduce"
         return "none"
 
     async def _sync_manual_thermostats(self, pump_state: State | None) -> None:
@@ -467,7 +536,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             await self._restore_thermostats()
 
     def _desired_mode(self, temperature: float) -> HVACMode:
-        if self._hvac_mode == HVACMode.OFF or self._opening_blocks_operation():
+        if self._hvac_mode == HVACMode.OFF or self._opening_stage != OPENING_STAGE_NONE:
             return HVACMode.OFF
         heat_on = temperature <= self._heat_target - self._hysteresis
         heat_off = temperature >= self._heat_target + self._hysteresis
@@ -485,10 +554,17 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         return HVACMode.OFF
 
     async def _evaluate(self, reason: str) -> None:
-        if not self._started:
+        if not self._started or self._eval_lock.locked():
+            # A running evaluation (possibly waiting for the heat pump to
+            # confirm a target) will be followed by the next periodic one.
             return
+        async with self._eval_lock:
+            await self._evaluate_locked(reason)
+
+    async def _evaluate_locked(self, reason: str) -> None:
         now = time()
-        opening_pause = self._opening_blocks_operation()
+        stage = self._update_opening()
+        opening_pause = stage != OPENING_STAGE_NONE
         if opening_pause and self._manual_until > now:
             # Openings are a safety/energy override. Resume automatic control,
             # rather than restarting an unknown remote-control mode later.
@@ -496,6 +572,9 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             self._preset_mode = PRESET_AUTO
         if self._manual_until > now:
             self.async_write_ha_state()
+            return
+        if stage == OPENING_STAGE_OFF:
+            await self._apply_opening_off()
             return
         if self._preset_mode == PRESET_MANUAL:
             self._preset_mode = PRESET_AUTO
@@ -530,8 +609,26 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
                 if self._hvac_mode == HVACMode.OFF and self._neutral_mode is not None:
                     await self._apply_mode(HVACMode.OFF, reason)
                     return
+                pump = self.hass.states.get(self._heat_pump)
+                pump_off = pump is not None and pump.state == HVACMode.OFF.value
+                if opening_pause and pump_off:
+                    # Never switch a stopped unit on just because a door opened.
+                    self._neutral_mode = None
+                    await self._restore_thermostats()
+                    self.async_write_ha_state()
+                    return
                 if self._hvac_mode != HVACMode.OFF and self._neutral_mode is None:
-                    await self._apply_neutral(reason)
+                    await self._apply_neutral("opening_reduce" if opening_pause else reason)
+                    return
+                if (
+                    self._hvac_mode != HVACMode.OFF
+                    and self._neutral_mode is not None
+                    and now > self._command_guard_until
+                    and not self._pump_matches_neutral()
+                ):
+                    # The unit is not where we left it (e.g. it ignored the
+                    # requested target, or came back from an opening OFF).
+                    await self._apply_neutral("opening_reduce" if opening_pause else "neutral_repair")
                     return
                 await self._restore_thermostats()
             else:
@@ -564,9 +661,101 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
                 return
             await self._prepare_setpoint(desired)
         if desired == HVACMode.OFF and self._hvac_mode != HVACMode.OFF:
-            await self._apply_neutral("opening_pause" if opening_pause else reason)
+            await self._apply_neutral("opening_reduce" if opening_pause else reason)
         else:
-            await self._apply_mode(desired, "opening_pause" if opening_pause else reason)
+            await self._apply_mode(desired, "opening_reduce" if opening_pause else reason)
+
+    async def _apply_opening_off(self) -> None:
+        """Hold the physical unit fully off while an opening has stayed open long."""
+        pump = self.hass.states.get(self._heat_pump)
+        if pump is None or pump.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            self.async_write_ha_state()
+            return
+        if pump.state != HVACMode.OFF.value:
+            await self._apply_mode(HVACMode.OFF, "opening_off")
+            return
+        if self._active_mode != HVACMode.OFF or self._neutral_mode is not None:
+            self._active_mode = HVACMode.OFF
+            self._neutral_mode = None
+            self._last_transition = time()
+        await self._restore_thermostats()
+        self.async_write_ha_state()
+
+    def _neutral_target(self, mode: HVACMode, pump: State) -> float:
+        if mode == HVACMode.HEAT:
+            learned = self._min_heat_accepted
+            advertised = float(pump.attributes.get("min_temp", 16))
+            return max(advertised, learned) if learned is not None else advertised
+        learned = self._max_cool_accepted
+        advertised = float(pump.attributes.get("max_temp", 32))
+        return min(advertised, learned) if learned is not None else advertised
+
+    def _pump_matches_neutral(self) -> bool:
+        pump = self.hass.states.get(self._heat_pump)
+        if pump is None or self._neutral_mode is None:
+            return True
+        if pump.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return True
+        if pump.state != self._neutral_mode.value:
+            return False
+        try:
+            return abs(float(pump.attributes.get("temperature")) - self._neutral_target(self._neutral_mode, pump)) < 1
+        except (TypeError, ValueError):
+            return False
+
+    async def _wait_for_pump_target(self, target: float) -> bool:
+        for _ in range(_TARGET_CONFIRM_SECONDS * 2):
+            pump = self.hass.states.get(self._heat_pump)
+            try:
+                if pump is not None and abs(float(pump.attributes.get("temperature")) - target) < 0.5:
+                    return True
+            except (TypeError, ValueError):
+                pass
+            await asyncio.sleep(0.5)
+        return False
+
+    async def _set_pump_target(self, target: float, mode: HVACMode, step_towards_comfort: bool) -> float | None:
+        """Send a target and confirm the unit actually took it.
+
+        Some heat pumps (e.g. Qlima via Tuya) advertise a minimum they silently
+        reject in heat mode. When ``step_towards_comfort`` is set, a rejected
+        target is retried one degree closer to comfort and the accepted value is
+        remembered for the next pause.
+        """
+        pump = self.hass.states.get(self._heat_pump)
+        lo = float(pump.attributes.get("min_temp", 16)) if pump else 16.0
+        hi = float(pump.attributes.get("max_temp", 32)) if pump else 32.0
+        for attempt in range(_TARGET_CONFIRM_ATTEMPTS if step_towards_comfort else 1):
+            target = float(max(lo, min(hi, target)))
+            self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+            await self.hass.services.async_call(
+                "climate",
+                "set_temperature",
+                {"entity_id": self._heat_pump, ATTR_TEMPERATURE: target},
+                blocking=True,
+                context=self._command_context,
+            )
+            self._command_count_temperature += 1
+            self._observed_pump_target = target
+            self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+            if await self._wait_for_pump_target(target):
+                if step_towards_comfort:
+                    if mode == HVACMode.HEAT:
+                        self._min_heat_accepted = target
+                    else:
+                        self._max_cool_accepted = target
+                return target
+            _LOGGER.warning(
+                "%s: %s did not accept target %.0f (attempt %d)",
+                self.entry.title,
+                self._heat_pump,
+                target,
+                attempt + 1,
+            )
+            if not step_towards_comfort:
+                return None
+            target = target + 1 if mode == HVACMode.HEAT else target - 1
+        return None
 
     async def _apply_neutral(self, reason: str) -> None:
         """Stop demand without power-cycling the physical heat pump."""
@@ -584,11 +773,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         else:
             neutral_mode = HVACMode.COOL if self._hvac_mode == HVACMode.COOL else HVACMode.HEAT
 
-        neutral_target = float(
-            pump.attributes.get("min_temp", 16)
-            if neutral_mode == HVACMode.HEAT
-            else pump.attributes.get("max_temp", 32)
-        )
+        neutral_target = self._neutral_target(neutral_mode, pump)
         current_target = pump.attributes.get("temperature")
         try:
             target_matches = abs(float(current_target) - neutral_target) < 1
@@ -606,16 +791,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             self._command_count_mode += 1
             self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
         if not target_matches:
-            await self.hass.services.async_call(
-                "climate",
-                "set_temperature",
-                {"entity_id": self._heat_pump, ATTR_TEMPERATURE: neutral_target},
-                blocking=True,
-                context=self._command_context,
-            )
-            self._command_count_temperature += 1
-            self._observed_pump_target = neutral_target
-            self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+            await self._set_pump_target(neutral_target, neutral_mode, step_towards_comfort=True)
         self._last_command = time()
         self._last_command_reason = reason
         self._neutral_mode = neutral_mode
@@ -640,6 +816,10 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
                 pass
         min_temp = float(pump.attributes.get("min_temp", 16))
         max_temp = float(pump.attributes.get("max_temp", 32))
+        if self._min_heat_accepted is not None:
+            min_temp = max(min_temp, self._min_heat_accepted)
+        if self._max_cool_accepted is not None:
+            max_temp = min(max_temp, self._max_cool_accepted)
         desired = float(round(max(min_temp, min(max_temp, desired))))
         current = pump.attributes.get("temperature")
         try:

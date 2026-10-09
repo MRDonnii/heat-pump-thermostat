@@ -18,7 +18,8 @@ from .const import (
     CONF_MIN_OFF_MINUTES,
     CONF_MIN_RUN_MINUTES,
     CONF_OPENING_SENSORS,
-    CONF_OPENING_OFF_DELAY_SECONDS,
+    CONF_OPENING_MIN_DELAY_MINUTES,
+    CONF_OPENING_OFF_DELAY_MINUTES,
     CONF_OPENING_RESUME_DELAY_MINUTES,
     CONF_SENSOR_STABLE_SECONDS,
     CONF_SENSOR_LOSS_GRACE_SECONDS,
@@ -31,7 +32,8 @@ from .const import (
     DEFAULT_MANUAL_OVERRIDE_MINUTES,
     DEFAULT_MIN_OFF_MINUTES,
     DEFAULT_MIN_RUN_MINUTES,
-    DEFAULT_OPENING_OFF_DELAY_SECONDS,
+    DEFAULT_OPENING_MIN_DELAY_MINUTES,
+    DEFAULT_OPENING_OFF_DELAY_MINUTES,
     DEFAULT_OPENING_RESUME_DELAY_MINUTES,
     DEFAULT_SENSOR_STABLE_SECONDS,
     DEFAULT_SENSOR_LOSS_GRACE_SECONDS,
@@ -73,11 +75,17 @@ def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 selector.EntitySelectorConfig(domain="binary_sensor", multiple=True)
             ),
             vol.Required(
-                CONF_OPENING_OFF_DELAY_SECONDS,
+                CONF_OPENING_MIN_DELAY_MINUTES,
                 default=value(
-                    CONF_OPENING_OFF_DELAY_SECONDS, DEFAULT_OPENING_OFF_DELAY_SECONDS
+                    CONF_OPENING_MIN_DELAY_MINUTES, DEFAULT_OPENING_MIN_DELAY_MINUTES
                 ),
-            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=180)),
+            vol.Required(
+                CONF_OPENING_OFF_DELAY_MINUTES,
+                default=value(
+                    CONF_OPENING_OFF_DELAY_MINUTES, DEFAULT_OPENING_OFF_DELAY_MINUTES
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=600)),
             vol.Required(
                 CONF_OPENING_RESUME_DELAY_MINUTES,
                 default=value(
@@ -140,6 +148,12 @@ class HeatPumpThermostatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle initial setup."""
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=_schema())
+        if int(user_input[CONF_OPENING_OFF_DELAY_MINUTES]) < int(user_input[CONF_OPENING_MIN_DELAY_MINUTES]):
+            return self.async_show_form(
+                step_id="user",
+                data_schema=_schema(user_input),
+                errors={CONF_OPENING_OFF_DELAY_MINUTES: "off_before_min"},
+            )
         if float(user_input[CONF_COOL_TARGET]) <= float(user_input[CONF_HEAT_TARGET]):
             return self.async_show_form(
                 step_id="user",
@@ -165,6 +179,12 @@ class HeatPumpThermostatOptionsFlow(config_entries.OptionsFlow):
         current = {**self.entry.data, **self.entry.options}
         if user_input is None:
             return self.async_show_form(step_id="init", data_schema=_schema(current))
+        if int(user_input[CONF_OPENING_OFF_DELAY_MINUTES]) < int(user_input[CONF_OPENING_MIN_DELAY_MINUTES]):
+            return self.async_show_form(
+                step_id="init",
+                data_schema=_schema(user_input),
+                errors={CONF_OPENING_OFF_DELAY_MINUTES: "off_before_min"},
+            )
         if float(user_input[CONF_COOL_TARGET]) <= float(user_input[CONF_HEAT_TARGET]):
             return self.async_show_form(
                 step_id="init",
