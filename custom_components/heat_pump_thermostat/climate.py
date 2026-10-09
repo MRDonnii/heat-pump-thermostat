@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 import logging
+import math
 from time import time
 from typing import Any
 
@@ -58,6 +59,11 @@ _EVALUATION_SECONDS = 30
 _OPENING_STARTUP_GRACE_SECONDS = 90
 
 
+def _whole(value: Any) -> float:
+    """Round a target to a whole degree, halves up (the heat pumps only take whole degrees)."""
+    return float(math.floor(float(value) + 0.5))
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
     """Set up one controller entity."""
     entity = HeatPumpThermostat(hass, entry)
@@ -80,7 +86,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         | ClimateEntityFeature.TURN_ON
     )
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
-    _attr_target_temperature_step = 0.5
+    _attr_target_temperature_step = 1.0
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
@@ -134,8 +140,8 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
                 DEFAULT_OPENING_RESUME_DELAY_MINUTES,
             )
         ) * 60
-        self._heat_target = float(cfg.get(CONF_HEAT_TARGET, self._heat_target))
-        self._cool_target = float(cfg.get(CONF_COOL_TARGET, self._cool_target))
+        self._heat_target = _whole(cfg.get(CONF_HEAT_TARGET, self._heat_target))
+        self._cool_target = _whole(cfg.get(CONF_COOL_TARGET, self._cool_target))
         self._hysteresis = float(cfg.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS))
         self._min_run = float(cfg.get(CONF_MIN_RUN_MINUTES, DEFAULT_MIN_RUN_MINUTES)) * 60
         self._min_off = float(cfg.get(CONF_MIN_OFF_MINUTES, DEFAULT_MIN_OFF_MINUTES)) * 60
@@ -236,10 +242,10 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             except ValueError:
                 self._hvac_mode = HVACMode.OFF
             attrs = old.attributes
-            self._heat_target = float(
+            self._heat_target = _whole(
                 attrs.get("heat_target_saved", attrs.get("target_temp_low", self._heat_target))
             )
-            self._cool_target = float(
+            self._cool_target = _whole(
                 attrs.get("cool_target_saved", attrs.get("target_temp_high", self._cool_target))
             )
             try:
@@ -739,14 +745,14 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
 
     async def async_set_temperature(self, **kwargs) -> None:
         if kwargs.get("target_temp_low") is not None:
-            self._heat_target = float(kwargs["target_temp_low"])
+            self._heat_target = _whole(kwargs["target_temp_low"])
         if kwargs.get("target_temp_high") is not None:
-            self._cool_target = float(kwargs["target_temp_high"])
+            self._cool_target = _whole(kwargs["target_temp_high"])
         if kwargs.get(ATTR_TEMPERATURE) is not None:
             if self._hvac_mode == HVACMode.COOL:
-                self._cool_target = float(kwargs[ATTR_TEMPERATURE])
+                self._cool_target = _whole(kwargs[ATTR_TEMPERATURE])
             else:
-                self._heat_target = float(kwargs[ATTR_TEMPERATURE])
+                self._heat_target = _whole(kwargs[ATTR_TEMPERATURE])
         self.async_write_ha_state()
         await self._evaluate("target_change")
 

@@ -88,12 +88,12 @@ def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             vol.Required(
                 CONF_HEAT_TARGET, default=value(CONF_HEAT_TARGET, DEFAULT_HEAT_TARGET)
             ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=16, max=30, step=0.5, unit_of_measurement="°C")
+                selector.NumberSelectorConfig(min=16, max=30, step=1, unit_of_measurement="°C")
             ),
             vol.Required(
                 CONF_COOL_TARGET, default=value(CONF_COOL_TARGET, DEFAULT_COOL_TARGET)
             ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=18, max=32, step=0.5, unit_of_measurement="°C")
+                selector.NumberSelectorConfig(min=18, max=32, step=1, unit_of_measurement="°C")
             ),
             vol.Required(
                 CONF_HYSTERESIS, default=value(CONF_HYSTERESIS, DEFAULT_HYSTERESIS)
