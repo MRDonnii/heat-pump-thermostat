@@ -69,9 +69,75 @@
       "unit_preset": {
         "name": "Unit preset",
         "state": {
+          "none": "Normal",
           "eco": "Eco",
-          "comfort": "Comfort"
+          "comfort": "Comfort",
+          "boost": "Boost",
+          "sleep": "Sleep"
         }
+      }
+    },
+    "button": {
+      "release": {
+        "name": "Release"
+      }
+    },
+    "sensor": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "off": "Off",
+          "manual": "Manual override",
+          "opening_off": "Off – door/window open",
+          "opening_reduced": "Turned down – door/window open",
+          "opening_resume_wait": "Waiting to resume",
+          "opening_reduce_wait": "Door/window open",
+          "sensor_lost": "Sensor lost",
+          "start_wait": "Waiting to start",
+          "heating": "Heating",
+          "cooling": "Cooling",
+          "drying": "Drying",
+          "fan_only": "Fan only",
+          "idle": "Idle"
+        }
+      },
+      "next_change": {
+        "name": "Next change",
+        "state_attributes": {
+          "event": {
+            "name": "Event",
+            "state": {
+              "manual_override": "Manual override ends",
+              "opening_reduce": "Turn down",
+              "opening_off": "Switch off",
+              "opening_resume": "Resume",
+              "start_allowed": "Start",
+              "min_run": "Minimum run ends",
+              "sensor_loss": "Pause for sensor loss"
+            }
+          }
+        }
+      },
+      "countdown_manual_override": {
+        "name": "Manual override ends"
+      },
+      "countdown_opening_reduce": {
+        "name": "Door/window: turn down at"
+      },
+      "countdown_opening_off": {
+        "name": "Door/window: switch off at"
+      },
+      "countdown_opening_resume": {
+        "name": "Door/window: resume at"
+      },
+      "countdown_start_allowed": {
+        "name": "Start allowed at"
+      },
+      "countdown_min_run": {
+        "name": "Minimum run ends"
+      },
+      "countdown_sensor_loss": {
+        "name": "Sensor loss: pause at"
       }
     }
   }

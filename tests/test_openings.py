@@ -369,3 +369,89 @@ async def test_user_turn_on_with_door_open_restarts_timers(hass, clock):
     assert attrs["opening_pause_reason"] == "waiting_to_reduce"
     await _tick(hass, entity, clock, 5.5)
     assert entity.extra_state_attributes["opening_stage"] == "min"
+
+
+def _sensor_state(hass, suffix: str):
+    for state in hass.states.async_all("sensor"):
+        if state.entity_id.endswith(suffix):
+            return state
+    raise AssertionError(f"no sensor ending in {suffix}: {[s.entity_id for s in hass.states.async_all('sensor')]}")
+
+
+async def test_status_and_door_countdowns(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    assert entity.status() == "heating"
+    await _set_door(hass, "on")
+    await _tick(hass, entity, clock, 1)
+    assert entity.status() == "opening_reduce_wait"
+    downs = entity.countdowns()
+    open_since = entity.extra_state_attributes["opening_open_since_timestamp"]
+    assert downs["opening_reduce"] == pytest.approx(open_since + 5 * 60)
+    assert downs["opening_off"] == pytest.approx(open_since + 20 * 60)
+    assert entity.next_change() == ("opening_reduce", downs["opening_reduce"])
+    assert _sensor_state(hass, "_status").state == "opening_reduce_wait"
+    assert _sensor_state(hass, "_next_change").attributes["event"] == "opening_reduce"
+    await _tick(hass, entity, clock, 5)
+    assert entity.status() == "opening_reduced"
+    assert entity.countdowns()["opening_reduce"] is None
+    await _set_door(hass, "off")
+    await _tick(hass, entity, clock, 0.5)
+    assert entity.status() == "opening_resume_wait"
+    resume = entity.countdowns()["opening_resume"]
+    assert resume == pytest.approx(entity.extra_state_attributes["opening_closed_since_timestamp"] + 10 * 60)
+    await _tick(hass, entity, clock, 11)
+    assert entity.countdowns()["opening_resume"] is None
+
+
+async def test_release_clears_door_pause_and_restarts(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    await _set_door(hass, "on")
+    await _tick(hass, entity, clock, 21)
+    assert entity.extra_state_attributes["opening_stage"] == "off"
+    assert pump.state == "off"
+    await _set_door(hass, "off")
+    await _tick(hass, entity, clock, 0.5)
+    assert entity.status() == "opening_resume_wait"
+    buttons = [s.entity_id for s in hass.states.async_all("button")]
+    assert buttons, buttons
+    await hass.services.async_call("button", "press", {"entity_id": buttons[0]}, blocking=True)
+    await hass.async_block_till_done()
+    assert entity.extra_state_attributes["opening_stage"] == "none"
+    assert pump.state == "heat" and pump.target > 17
+    assert entity.status() == "heating"
+
+
+async def test_release_ends_manual_override(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    clock.advance(3)
+    pump.target = 28
+    pump.publish()
+    await hass.async_block_till_done()
+    assert entity.status() == "manual"
+    assert entity.countdowns()["manual_override"] is not None
+    await entity.async_release()
+    await hass.async_block_till_done()
+    assert entity.preset_mode == "auto"
+    assert entity.countdowns()["manual_override"] is None
+    assert entity.status() != "manual"
+
+
+async def test_min_run_countdown(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    downs = entity.countdowns()
+    assert downs["min_run"] == pytest.approx(entity.extra_state_attributes["last_transition_timestamp"] + 20 * 60)
+    await _tick(hass, entity, clock, 21)
+    assert entity.countdowns()["min_run"] is None
+
+
+async def test_single_setpoint_outside_heat_cool(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    state = hass.states.get(entity.entity_id)
+    assert state.attributes.get("temperature") == 22
+    assert state.attributes.get("target_temp_low") is None
+    await entity.async_set_hvac_mode("heat_cool")
+    await hass.async_block_till_done()
+    state = hass.states.get(entity.entity_id)
+    assert state.attributes.get("target_temp_low") == 22
+    assert state.attributes.get("target_temp_high") == 25
+    assert state.attributes.get("temperature") is None

@@ -20,6 +20,8 @@ A Home Assistant custom integration that creates a virtual climate entity for an
 - Can optionally pause selected climate entities while the heat pump is actively heating or cooling. The list may be left empty.
 - Restores setpoints and controller state after a Home Assistant restart.
 - Passes the unit's own controls through the thermostat: fan speed, vertical and horizontal swing, dry and fan-only modes, and the unit's preset (e.g. eco/comfort) as a select entity on the thermostat device.
+- A **Release** button that drops every hold at once: manual override, door/window pause and the start waits. Control resumes immediately; an opening that is still open starts fresh timers.
+- A **Status** sensor (heating, idle, door/window pause, waiting to resume, manual override, waiting to start, ...) and timestamp sensors that count down every running timer: manual override, door/window turn-down, switch-off and resume, minimum off time before a start, minimum run time and sensor-loss grace. A **Next change** sensor shows the first timer to run out and what happens then.
 - Exposes diagnostic attributes such as active mode, neutral mode, pending mode, opening pause, command counters, and paused thermostats.
 - Supports multiple independent heat pumps by adding the integration once per unit.
 
@@ -78,6 +80,15 @@ Report problems and feature requests in [GitHub Issues](https://github.com/MRDon
 MIT
 
 ## Changelog
+
+### 0.4.1
+- The thermostat shows one setpoint in heat, cool and off, and the heat/cool range only in heat_cool.
+- Countdown sensors are diagnostic entities, so the device page shows status, next change and release first.
+- The unit preset select shows `none` as "Normal" and has names for eco, comfort, boost and sleep.
+
+### 0.4.0
+- New **Release** button per thermostat: clears manual override, door/window pause and start waits, and resumes automatic control at once.
+- New **Status** enum sensor, **Next change** timestamp sensor and one countdown timestamp sensor per timer (manual override, door/window turn-down/off/resume, start allowed, minimum run, sensor loss). The thermostat also exposes `status`, `next_event` and `next_change_timestamp` attributes.
 
 ### 0.3.2
 - An explicit user command (turning the thermostat on or changing the target) clears a running door/window pause. If an opening is still open, its timers start again from that moment.

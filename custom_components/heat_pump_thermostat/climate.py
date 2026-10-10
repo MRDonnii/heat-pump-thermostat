@@ -20,6 +20,7 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import Context, Event, HomeAssistant, State, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -40,6 +41,14 @@ from .const import (
     CONF_SETPOINT_COMPENSATION,
     CONF_TEMPERATURE_SENSOR,
     CONF_THERMOSTATS_TO_DISABLE,
+    COUNTDOWN_MANUAL_OVERRIDE,
+    COUNTDOWN_MIN_RUN,
+    COUNTDOWN_OPENING_OFF,
+    COUNTDOWN_OPENING_REDUCE,
+    COUNTDOWN_OPENING_RESUME,
+    COUNTDOWN_SENSOR_LOSS,
+    COUNTDOWN_START_ALLOWED,
+    COUNTDOWNS,
     DEFAULT_COOL_TARGET,
     DEFAULT_HEAT_TARGET,
     DEFAULT_HYSTERESIS,
@@ -57,6 +66,7 @@ from .const import (
     OPENING_STAGE_OFF,
     PRESET_AUTO,
     PRESET_MANUAL,
+    SIGNAL_UPDATE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -99,9 +109,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
     ]
     _attr_preset_modes = [PRESET_AUTO, PRESET_MANUAL]
     _base_features = (
-        ClimateEntityFeature.TARGET_TEMPERATURE
-        | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
-        | ClimateEntityFeature.PRESET_MODE
+        ClimateEntityFeature.PRESET_MODE
         | ClimateEntityFeature.TURN_OFF
         | ClimateEntityFeature.TURN_ON
     )
@@ -205,7 +213,12 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
 
     @property
     def supported_features(self):
-        features = self._base_features
+        # Show a single setpoint, and the heat/cool range only in heat_cool.
+        features = self._base_features | (
+            ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+            if self._hvac_mode == HVACMode.HEAT_COOL
+            else ClimateEntityFeature.TARGET_TEMPERATURE
+        )
         if self._pump_attr("fan_modes"):
             features |= ClimateEntityFeature.FAN_MODE
         if self._pump_attr("swing_modes"):
@@ -291,22 +304,28 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
 
     @property
     def target_temperature(self):
+        if self._hvac_mode == HVACMode.HEAT_COOL:
+            return None
         if self._hvac_mode == HVACMode.COOL:
             return self._cool_target
         return self._heat_target
 
     @property
     def target_temperature_low(self):
-        return self._heat_target
+        return self._heat_target if self._hvac_mode == HVACMode.HEAT_COOL else None
 
     @property
     def target_temperature_high(self):
-        return self._cool_target
+        return self._cool_target if self._hvac_mode == HVACMode.HEAT_COOL else None
 
     @property
     def extra_state_attributes(self):
         remaining = max(0, int((self._manual_until - time()) / 60))
+        next_event, next_at = self.next_change()
         return {
+            "status": self.status(),
+            "next_event": next_event,
+            "next_change_timestamp": next_at,
             "heat_pump": self._heat_pump,
             "temperature_sensor": self._sensor,
             "active_mode": self._active_mode,
@@ -345,6 +364,103 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             "command_count_mode_saved": self._command_count_mode,
             "command_count_temperature_saved": self._command_count_temperature,
         }
+
+    @callback
+    def async_write_ha_state(self) -> None:
+        """Write the state and let the status/countdown/release entities follow."""
+        super().async_write_ha_state()
+        if self.hass is not None:
+            async_dispatcher_send(self.hass, SIGNAL_UPDATE.format(self.entry.entry_id))
+
+    def status(self) -> str:
+        """One word for what the thermostat is doing right now."""
+        if self._hvac_mode == HVACMode.OFF:
+            return "off"
+        if self._manual_until > time():
+            return "manual"
+        reason = self._opening_pause_reason()
+        if reason == "off":
+            return "opening_off"
+        if reason == "reduced":
+            return "opening_reduced"
+        if reason == "waiting_to_resume":
+            return "opening_resume_wait"
+        if self._sensor_unavailable_since is not None:
+            return "sensor_lost"
+        if self._start_wait_minutes() > 0:
+            return "start_wait"
+        if reason == "waiting_to_reduce":
+            return "opening_reduce_wait"
+        return {
+            HVACMode.HEAT: "heating",
+            HVACMode.COOL: "cooling",
+            HVACMode.DRY: "drying",
+            HVACMode.FAN_ONLY: "fan_only",
+        }.get(self._active_mode, "idle")
+
+    def countdowns(self) -> dict[str, float | None]:
+        """When each running timer ends (epoch seconds), or None when it is not running.
+
+        The values are derived from the stored start times, so they stay
+        constant while a timer runs instead of being recomputed from now.
+        """
+        now = time()
+        out: dict[str, float | None] = dict.fromkeys(COUNTDOWNS)
+
+        def future(value: float) -> float | None:
+            return value if value > now else None
+
+        if self._manual_until > now:
+            out[COUNTDOWN_MANUAL_OVERRIDE] = self._manual_until
+        if self._hvac_mode != HVACMode.OFF:
+            if self._opening_open_since is not None:
+                # Open time only accrues while an opening is open.
+                accum = self._opening_open_accum
+                if self._opening_stage == OPENING_STAGE_NONE:
+                    out[COUNTDOWN_OPENING_REDUCE] = future(
+                        self._opening_open_since + self._opening_min_delay - accum
+                    )
+                if self._opening_stage != OPENING_STAGE_OFF:
+                    out[COUNTDOWN_OPENING_OFF] = future(
+                        self._opening_open_since + self._opening_off_delay - accum
+                    )
+            elif self._opening_closed_since is not None and self._opening_stage != OPENING_STAGE_NONE:
+                out[COUNTDOWN_OPENING_RESUME] = future(
+                    self._opening_closed_since + self._opening_resume_delay
+                )
+            if self._pending_mode is not None and self._active_mode == HVACMode.OFF:
+                out[COUNTDOWN_START_ALLOWED] = future(self._last_transition + self._min_off)
+            if self._active_mode in (HVACMode.HEAT, HVACMode.COOL):
+                out[COUNTDOWN_MIN_RUN] = future(self._last_transition + self._min_run)
+            if self._sensor_unavailable_since is not None:
+                out[COUNTDOWN_SENSOR_LOSS] = future(
+                    self._sensor_unavailable_since + self._sensor_loss_grace
+                )
+        return out
+
+    def next_change(self) -> tuple[str | None, float | None]:
+        """The first timer to run out: (countdown key, epoch seconds)."""
+        running = [(at, key) for key, at in self.countdowns().items() if at is not None]
+        if not running:
+            return None, None
+        at, key = min(running)
+        return key, at
+
+    async def async_release(self) -> None:
+        """Release every hold now: manual override, door/window pause and start waits.
+
+        The thermostat goes straight back to automatic control. A door or
+        window that is still open starts a fresh episode with fresh timers.
+        """
+        _LOGGER.info("%s: released by user", self.entry.title)
+        self._manual_until = 0
+        self._preset_mode = PRESET_AUTO
+        if self._hvac_mode != HVACMode.OFF:
+            self._reset_opening_episode()
+            self._user_start = True
+            self._sensor_stable_since = 0.0
+        self.async_write_ha_state()
+        await self._evaluate("release")
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -484,6 +600,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
     @callback
     def _periodic_update(self, _now) -> None:
         self._update_opening()
+        self.async_write_ha_state()
         self.hass.async_create_task(self._evaluate("periodic"))
 
     def _detect_manual_change(self, new_state: State | None) -> None:
@@ -781,7 +898,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         # room heating after the user has explicitly removed that demand.
         # Minimum *off* time still protects the compressor from restarting
         # again too quickly.
-        user_removed_demand = reason in ("target_change", "resume_auto") and desired == HVACMode.OFF
+        user_removed_demand = reason in ("target_change", "resume_auto", "release") and desired == HVACMode.OFF
         safety_off = (
             opening_pause
             or self._hvac_mode == HVACMode.OFF

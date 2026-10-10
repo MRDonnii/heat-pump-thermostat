@@ -40,4 +40,42 @@ OPENING_STAGE_NONE = "none"
 OPENING_STAGE_MIN = "min"
 OPENING_STAGE_OFF = "off"
 
-PLATFORMS = ["climate", "select"]
+PLATFORMS = ["climate", "select", "sensor", "button"]
+
+# Dispatcher signal sent whenever a thermostat writes its state.
+SIGNAL_UPDATE = "heat_pump_thermostat_update_{}"
+
+# Countdowns exposed as timestamp sensors, in display order.
+COUNTDOWN_MANUAL_OVERRIDE = "manual_override"
+COUNTDOWN_OPENING_REDUCE = "opening_reduce"
+COUNTDOWN_OPENING_OFF = "opening_off"
+COUNTDOWN_OPENING_RESUME = "opening_resume"
+COUNTDOWN_START_ALLOWED = "start_allowed"
+COUNTDOWN_MIN_RUN = "min_run"
+COUNTDOWN_SENSOR_LOSS = "sensor_loss"
+COUNTDOWNS = (
+    COUNTDOWN_MANUAL_OVERRIDE,
+    COUNTDOWN_OPENING_REDUCE,
+    COUNTDOWN_OPENING_OFF,
+    COUNTDOWN_OPENING_RESUME,
+    COUNTDOWN_START_ALLOWED,
+    COUNTDOWN_MIN_RUN,
+    COUNTDOWN_SENSOR_LOSS,
+)
+
+# What the thermostat is doing right now (enum sensor).
+STATUSES = (
+    "off",
+    "manual",
+    "opening_off",
+    "opening_reduced",
+    "opening_resume_wait",
+    "opening_reduce_wait",
+    "sensor_lost",
+    "start_wait",
+    "heating",
+    "cooling",
+    "drying",
+    "fan_only",
+    "idle",
+)
