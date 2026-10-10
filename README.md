@@ -12,7 +12,7 @@ A Home Assistant custom integration that creates a virtual climate entity for an
 - Applies configurable hysteresis, minimum run time, and minimum off time.
 - Keeps the heat pump powered in a neutral mode when there is no demand instead of repeatedly switching it off and on.
 - Optional setpoint compensation for heat pumps that only expose their own internal temperature.
-- Two-stage door/window handling: after an opening has been open for a while (default 5 min) the heat pump is turned down to the lowest target the unit really accepts; after a longer time (default 20 min) it is switched off completely. Open time accumulates across short openings, a brief re-opening never cancels the pause, and normal control resumes only after every opening has stayed closed for the resume delay (default 10 min). A unit that is already off is never switched on by an opening.
+- Two-stage door/window handling: after an opening has been open for a while (default 5 min) the heat pump is turned down to the lowest target the unit really accepts; after a longer time (default 20 min) it is switched off completely. Open time accumulates across short openings, a brief re-opening never cancels the pause, and normal control resumes only after every opening has stayed closed for the resume delay (default 10 min). A unit that is already off is never switched on by an opening. Turning the thermostat on or changing its target yourself clears a running pause.
 - Confirms every turn-down target: some units (for example Qlima via Tuya) silently ignore their advertised minimum in heat mode, so a rejected target is retried one degree higher and the accepted value is remembered.
 - Handles temporary temperature-sensor loss with a configurable grace period.
 - Detects manual remote-control changes without continuously overwriting them.
@@ -78,6 +78,9 @@ Report problems and feature requests in [GitHub Issues](https://github.com/MRDon
 MIT
 
 ## Changelog
+
+### 0.3.2
+- An explicit user command (turning the thermostat on or changing the target) clears a running door/window pause. If an opening is still open, its timers start again from that moment.
 
 ### 0.3.1
 - Add English translation file so entity names (the unit preset select) show in English installations.

@@ -626,6 +626,21 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
                 self._opening_stage = OPENING_STAGE_MIN
         return self._opening_stage
 
+    def _reset_opening_episode(self) -> None:
+        """Forget the current door/window pause after an explicit user command.
+
+        The user is there and asked for heat/cool now. If an opening is still
+        open, a fresh episode (with fresh timers) starts from this moment.
+        """
+        if self._opening_episode_start is not None:
+            _LOGGER.info("%s: user command clears the opening pause", self.entry.title)
+        self._opening_episode_start = None
+        self._opening_open_accum = 0.0
+        self._opening_open_since = None
+        self._opening_closed_since = None
+        self._opening_stage = OPENING_STAGE_NONE
+        self._update_opening()
+
     def _opening_pause_reason(self) -> str:
         is_open = self._opening_is_open()
         if self._opening_stage == OPENING_STAGE_OFF:
@@ -1054,8 +1069,10 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         if self._hvac_mode == HVACMode.OFF:
             self._manual_until = 0
             self._user_start = False
-        elif previous == HVACMode.OFF:
-            self._user_start = True
+        else:
+            self._reset_opening_episode()
+            if previous == HVACMode.OFF:
+                self._user_start = True
         self.async_write_ha_state()
         await self._evaluate("thermostat_mode")
 
@@ -1069,6 +1086,8 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
                 self._cool_target = _whole(kwargs[ATTR_TEMPERATURE])
             else:
                 self._heat_target = _whole(kwargs[ATTR_TEMPERATURE])
+        if self._hvac_mode != HVACMode.OFF:
+            self._reset_opening_episode()
         self.async_write_ha_state()
         await self._evaluate("target_change")
 

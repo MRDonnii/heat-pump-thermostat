@@ -340,3 +340,32 @@ async def test_dry_chosen_on_unit_becomes_thermostat_mode(hass, clock):
     await hass.async_block_till_done()
     assert entity.hvac_mode == "dry"
     assert entity.extra_state_attributes["active_mode"] == "dry"
+
+
+async def test_user_turn_on_clears_opening_pause(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    await _set_door(hass, "on")
+    await _tick(hass, entity, clock, 12)
+    assert entity.extra_state_attributes["opening_stage"] == "min"
+    await _set_door(hass, "off")
+    await _tick(hass, entity, clock, 0.5)
+    # User turns it on again while the resume wait is running: heat now.
+    await entity.async_set_hvac_mode("off")
+    await entity.async_set_hvac_mode("heat")
+    await hass.async_block_till_done()
+    assert entity.extra_state_attributes["opening_stage"] == "none"
+    assert pump.state == "heat" and pump.target > 17
+
+
+async def test_user_turn_on_with_door_open_restarts_timers(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    await _set_door(hass, "on")
+    await _tick(hass, entity, clock, 6)
+    assert entity.extra_state_attributes["opening_stage"] == "min"
+    await entity.async_set_temperature(temperature=24)
+    await hass.async_block_till_done()
+    attrs = entity.extra_state_attributes
+    assert attrs["opening_stage"] == "none"
+    assert attrs["opening_pause_reason"] == "waiting_to_reduce"
+    await _tick(hass, entity, clock, 5.5)
+    assert entity.extra_state_attributes["opening_stage"] == "min"
