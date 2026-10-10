@@ -79,6 +79,9 @@ MIT
 
 ## Changelog
 
+### 0.3.1
+- Add English translation file so entity names (the unit preset select) show in English installations.
+
 ### 0.3.0
 - Fan mode, vertical and horizontal swing are mirrored from and passed through to the physical unit.
 - Dry and fan-only modes (when the unit supports them) are handed to the unit directly; a door/window that stays open long still switches them off. Choosing one of them on the unit itself becomes the thermostat mode.

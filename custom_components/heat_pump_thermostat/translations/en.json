@@ -1,0 +1,78 @@
+{
+  "title": "Heat Pump Thermostat",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up heat-pump thermostat",
+        "description": "Creates a new thermostat controlled by an external room sensor. No command is sent to the heat pump during setup.",
+        "data": {
+          "name": "Name",
+          "heat_pump": "Heat pump",
+          "temperature_sensor": "External temperature sensor",
+          "thermostats_to_disable": "Thermostats to turn off while the heat pump runs",
+          "opening_sensors": "Window and door sensors",
+          "opening_resume_delay_minutes": "Minutes all openings must stay closed before normal control resumes",
+          "heat_target": "Default heating target",
+          "cool_target": "Default cooling target",
+          "hysteresis": "Hysteresis",
+          "min_run_minutes": "Minimum run time (minutes)",
+          "min_off_minutes": "Minimum off time (minutes)",
+          "sensor_stable_seconds": "Sensor stability time (seconds)",
+          "sensor_loss_grace_seconds": "Delay before stopping after sensor loss (seconds)",
+          "manual_override_minutes": "Remote-control override (minutes)",
+          "setpoint_compensation": "Compensate the heat-pump setpoint from the external sensor",
+          "opening_min_delay_minutes": "Minutes an opening must be open before the heat pump is turned down to minimum",
+          "opening_off_delay_minutes": "Minutes an opening must be open before the heat pump is switched off"
+        }
+      }
+    },
+    "error": {
+      "cool_must_exceed_heat": "The cooling target must be higher than the heating target.",
+      "off_before_min": "The switch-off delay must be at least the turn-down delay."
+    },
+    "abort": {
+      "already_configured": "This heat pump is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Heat-pump thermostat settings",
+        "data": {
+          "name": "Name",
+          "heat_pump": "Heat pump",
+          "temperature_sensor": "External temperature sensor",
+          "thermostats_to_disable": "Thermostats to turn off while the heat pump runs",
+          "opening_sensors": "Window and door sensors",
+          "opening_resume_delay_minutes": "Minutes all openings must stay closed before normal control resumes",
+          "heat_target": "Default heating target",
+          "cool_target": "Default cooling target",
+          "hysteresis": "Hysteresis",
+          "min_run_minutes": "Minimum run time (minutes)",
+          "min_off_minutes": "Minimum off time (minutes)",
+          "sensor_stable_seconds": "Sensor stability time (seconds)",
+          "sensor_loss_grace_seconds": "Delay before stopping after sensor loss (seconds)",
+          "manual_override_minutes": "Remote-control override (minutes)",
+          "setpoint_compensation": "Compensate the heat-pump setpoint from the external sensor",
+          "opening_min_delay_minutes": "Minutes an opening must be open before the heat pump is turned down to minimum",
+          "opening_off_delay_minutes": "Minutes an opening must be open before the heat pump is switched off"
+        }
+      }
+    },
+    "error": {
+      "cool_must_exceed_heat": "The cooling target must be higher than the heating target.",
+      "off_before_min": "The switch-off delay must be at least the turn-down delay."
+    }
+  },
+  "entity": {
+    "select": {
+      "unit_preset": {
+        "name": "Unit preset",
+        "state": {
+          "eco": "Eco",
+          "comfort": "Comfort"
+        }
+      }
+    }
+  }
+}
