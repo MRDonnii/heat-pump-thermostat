@@ -78,6 +78,11 @@ MIT
 
 ## Changelog
 
+### 0.2.1
+- Turning the thermostat on yourself starts the heat pump at once; the minimum off time only holds back automatic restarts (the unit has its own compressor protection).
+- A change a person makes on the physical heat pump from Home Assistant is always treated as a manual change, also right after the thermostat's own commands.
+- New attribute `start_wait_minutes` shows how long an automatic start is held back.
+
 ### 0.2.0
 - Two-stage opening handling (turn down after 5 min, switch off after 20 min, resume after 10 min closed) replaces the single pause delay. The old seconds-based delay option is no longer used.
 - A brief re-opening during the resume wait no longer cancels the pause.

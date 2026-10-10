@@ -130,6 +130,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         self._min_heat_accepted: float | None = None
         self._max_cool_accepted: float | None = None
         self._eval_lock = asyncio.Lock()
+        self._user_start = False
         self._disabled_thermostats: dict[str, dict[str, Any]] = {}
         self._command_count_mode = 0
         self._command_count_temperature = 0
@@ -226,6 +227,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             "active_mode": self._active_mode,
             "neutral_mode": self._neutral_mode,
             "pending_mode": self._pending_mode,
+            "start_wait_minutes": self._start_wait_minutes(),
             "manual_override_remaining_minutes": remaining,
             "mode_command_count": self._command_count_mode,
             "temperature_command_count": self._command_count_temperature,
@@ -417,7 +419,16 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         # command.
         if time() - self._startup_time < _OPENING_STARTUP_GRACE_SECONDS:
             return
-        if time() <= self._command_guard_until:
+        context = new_state.context
+        user_command = (
+            context is not None
+            and context.user_id is not None
+            and context.id != self._command_context.id
+        )
+        if time() <= self._command_guard_until and not user_command:
+            # Changes right after our own commands are usually their echo. A
+            # change a person made from Home Assistant carries their user id,
+            # so it is always taken as a manual change.
             return
         if new_state.state not in {mode.value for mode in HVACMode}:
             return
@@ -458,6 +469,12 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             (state := self.hass.states.get(entity_id)) is not None and state.state == STATE_ON
             for entity_id in self._openings
         )
+
+    def _start_wait_minutes(self) -> float:
+        """Minutes left of the minimum off time while a start is pending."""
+        if self._pending_mode is None or self._active_mode != HVACMode.OFF:
+            return 0
+        return round(max(0.0, self._min_off - (time() - self._last_transition)) / 60, 1)
 
     def _opening_open_total(self) -> float:
         """Seconds an opening has been open during the current episode."""
@@ -604,6 +621,9 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             self._sensor_unavailable_since = None
             self._sensor_stable_since = now
         desired = self._desired_mode(temperature)
+        if desired == HVACMode.OFF:
+            # A user start only bypasses the start guards for the start itself.
+            self._user_start = False
         if desired == self._active_mode:
             if desired == HVACMode.OFF:
                 if self._hvac_mode == HVACMode.OFF and self._neutral_mode is not None:
@@ -650,11 +670,17 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         if self._active_mode != HVACMode.OFF and not safety_off and elapsed < self._min_run:
             return
         if desired != HVACMode.OFF:
-            if now - self._sensor_stable_since < self._stable_seconds:
+            user_start = self._user_start
+            if now - self._sensor_stable_since < self._stable_seconds and not user_start:
                 return
-            if self._active_mode == HVACMode.OFF and elapsed < self._min_off:
+            if self._active_mode == HVACMode.OFF and elapsed < self._min_off and not user_start:
+                # Automatic restarts respect the minimum off time. A start the
+                # user asked for goes ahead; the unit has its own compressor
+                # restart protection.
                 self._pending_mode = desired
+                self.async_write_ha_state()
                 return
+            self._user_start = False
             if self._active_mode != HVACMode.OFF:
                 self._pending_mode = desired
                 await self._apply_mode(HVACMode.OFF, "mode_change_pause")
@@ -917,9 +943,13 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def async_set_hvac_mode(self, hvac_mode) -> None:
+        previous = self._hvac_mode
         self._hvac_mode = HVACMode(hvac_mode)
         if self._hvac_mode == HVACMode.OFF:
             self._manual_until = 0
+            self._user_start = False
+        elif previous == HVACMode.OFF:
+            self._user_start = True
         self.async_write_ha_state()
         await self._evaluate("thermostat_mode")
 
