@@ -99,6 +99,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
 
     _attr_has_entity_name = True
     _attr_name = None
+    _attr_translation_key = "thermostat"
     _attr_hvac_modes = [
         HVACMode.OFF,
         HVACMode.HEAT,

@@ -81,6 +81,9 @@ MIT
 
 ## Changelog
 
+### 0.4.2
+- The thermostat's `status` and `next_event` attributes are translated, so a tile card can show what it is doing (e.g. `state_content: [hvac_action, status]`).
+
 ### 0.4.1
 - The thermostat shows one setpoint in heat, cool and off, and the heat/cool range only in heat_cool.
 - Countdown sensors are diagnostic entities, so the device page shows status, next change and release first.

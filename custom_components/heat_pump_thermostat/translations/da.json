@@ -139,6 +139,45 @@
       "countdown_sensor_loss": {
         "name": "Sensor væk: pause"
       }
+    },
+    "climate": {
+      "thermostat": {
+        "state_attributes": {
+          "status": {
+            "name": "Status",
+            "state": {
+              "off": "Slukket",
+              "manual": "Manuel overstyring",
+              "opening_off": "Slukket – dør/vindue åben",
+              "opening_reduced": "Skruet ned – dør/vindue åben",
+              "opening_resume_wait": "Venter på at genoptage",
+              "opening_reduce_wait": "Dør/vindue åben",
+              "sensor_lost": "Sensor væk",
+              "start_wait": "Venter på start",
+              "heating": "Varmer",
+              "cooling": "Køler",
+              "drying": "Affugter",
+              "fan_only": "Kun blæser",
+              "idle": "Tomgang"
+            }
+          },
+          "next_event": {
+            "name": "Næste hændelse",
+            "state": {
+              "manual_override": "Manuel overstyring slutter",
+              "opening_reduce": "Skrues ned",
+              "opening_off": "Slukker",
+              "opening_resume": "Genoptager",
+              "start_allowed": "Starter",
+              "min_run": "Min. kørsel slutter",
+              "sensor_loss": "Pause pga. sensor"
+            }
+          },
+          "next_change_timestamp": {
+            "name": "Næste skift"
+          }
+        }
+      }
     }
   }
 }
