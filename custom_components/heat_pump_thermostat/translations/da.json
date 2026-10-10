@@ -63,5 +63,16 @@
       "cool_must_exceed_heat": "Kølemålet skal være højere end varmemålet.",
       "off_before_min": "Forsinkelsen før sluk skal være mindst lige så lang som forsinkelsen før nedskruning."
     }
+  },
+  "entity": {
+    "select": {
+      "unit_preset": {
+        "name": "Varmepumpe-program",
+        "state": {
+          "eco": "Eco",
+          "comfort": "Komfort"
+        }
+      }
+    }
   }
 }

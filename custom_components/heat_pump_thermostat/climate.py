@@ -67,6 +67,9 @@ _OPENING_STARTUP_GRACE_SECONDS = 90
 # as rejected. Some units silently ignore their advertised minimum/maximum.
 _TARGET_CONFIRM_SECONDS = 10
 _TARGET_CONFIRM_ATTEMPTS = 4
+# Modes passed straight to the unit without temperature regulation.
+_DIRECT_MODES = (HVACMode.DRY, HVACMode.FAN_ONLY)
+_SWING_HORIZONTAL = getattr(ClimateEntityFeature, "SWING_HORIZONTAL_MODE", None)
 
 
 def _whole(value: Any) -> float:
@@ -86,9 +89,16 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
 
     _attr_has_entity_name = True
     _attr_name = None
-    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL, HVACMode.HEAT_COOL]
+    _attr_hvac_modes = [
+        HVACMode.OFF,
+        HVACMode.HEAT,
+        HVACMode.COOL,
+        HVACMode.HEAT_COOL,
+        HVACMode.DRY,
+        HVACMode.FAN_ONLY,
+    ]
     _attr_preset_modes = [PRESET_AUTO, PRESET_MANUAL]
-    _attr_supported_features = (
+    _base_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
         | ClimateEntityFeature.PRESET_MODE
@@ -185,7 +195,82 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         return self._hvac_mode
 
     @property
+    def hvac_modes(self):
+        """Offer dry/fan-only only when the physical unit supports them."""
+        modes = list(self._attr_hvac_modes)
+        pump_modes = self._pump_attr("hvac_modes")
+        if isinstance(pump_modes, list):
+            modes = [m for m in modes if m not in _DIRECT_MODES or m.value in pump_modes]
+        return modes
+
+    @property
+    def supported_features(self):
+        features = self._base_features
+        if self._pump_attr("fan_modes"):
+            features |= ClimateEntityFeature.FAN_MODE
+        if self._pump_attr("swing_modes"):
+            features |= ClimateEntityFeature.SWING_MODE
+        if self._pump_attr("swing_horizontal_modes") and _SWING_HORIZONTAL is not None:
+            features |= _SWING_HORIZONTAL
+        return features
+
+    def _pump_attr(self, key: str):
+        pump = self.hass.states.get(self._heat_pump) if self.hass else None
+        return pump.attributes.get(key) if pump is not None else None
+
+    @property
+    def fan_modes(self):
+        return self._pump_attr("fan_modes")
+
+    @property
+    def fan_mode(self):
+        return self._pump_attr("fan_mode")
+
+    @property
+    def swing_modes(self):
+        return self._pump_attr("swing_modes")
+
+    @property
+    def swing_mode(self):
+        return self._pump_attr("swing_mode")
+
+    @property
+    def swing_horizontal_modes(self):
+        return self._pump_attr("swing_horizontal_modes")
+
+    @property
+    def swing_horizontal_mode(self):
+        return self._pump_attr("swing_horizontal_mode")
+
+    async def _forward(self, service: str, data: dict[str, Any]) -> None:
+        """Pass a setting straight through to the physical unit."""
+        self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+        await self.hass.services.async_call(
+            "climate",
+            service,
+            {"entity_id": self._heat_pump, **data},
+            blocking=True,
+            context=self._command_context,
+        )
+        self.async_write_ha_state()
+
+    async def async_set_fan_mode(self, fan_mode: str) -> None:
+        await self._forward("set_fan_mode", {"fan_mode": fan_mode})
+
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
+        await self._forward("set_swing_mode", {"swing_mode": swing_mode})
+
+    async def async_set_swing_horizontal_mode(self, swing_horizontal_mode: str) -> None:
+        await self._forward(
+            "set_swing_horizontal_mode", {"swing_horizontal_mode": swing_horizontal_mode}
+        )
+
+    @property
     def hvac_action(self):
+        if self._active_mode == HVACMode.DRY:
+            return HVACAction.DRYING
+        if self._active_mode == HVACMode.FAN_ONLY:
+            return HVACAction.FAN
         if self._active_mode == HVACMode.HEAT:
             return HVACAction.HEATING
         if self._active_mode == HVACMode.COOL:
@@ -390,6 +475,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         if entity_id == self._heat_pump:
             new_state = event.data.get("new_state")
             self._detect_manual_change(new_state)
+            self.async_write_ha_state()  # fan/swing are mirrored from the unit
             self.hass.async_create_task(self._sync_manual_thermostats(new_state))
         if entity_id in self._openings:
             self._update_opening()
@@ -454,8 +540,17 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         if (
             new_state.state != expected_mode.value or target_changed
         ) and self._override_seconds > 0:
+            if manual_mode in _DIRECT_MODES:
+                # Dry/fan-only chosen on the unit becomes the thermostat mode.
+                self._hvac_mode = manual_mode
+                self._active_mode = manual_mode
+                self._neutral_mode = None
+                self._manual_until = 0
+                self._preset_mode = PRESET_AUTO
+                self._pending_mode = None
+                return
             if manual_mode in (HVACMode.HEAT, HVACMode.COOL):
-                if self._hvac_mode == HVACMode.OFF:
+                if self._hvac_mode == HVACMode.OFF or self._hvac_mode in _DIRECT_MODES:
                     self._hvac_mode = manual_mode
                 self._active_mode = manual_mode
             self._neutral_mode = None
@@ -592,6 +687,17 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             return
         if stage == OPENING_STAGE_OFF:
             await self._apply_opening_off()
+            return
+        if self._hvac_mode in _DIRECT_MODES:
+            # Dry and fan-only are handed to the unit as they are; only an
+            # opening that stays open long switches them off (above).
+            pump = self.hass.states.get(self._heat_pump)
+            if pump is not None and pump.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                if pump.state != self._hvac_mode.value or self._active_mode != self._hvac_mode:
+                    await self._apply_mode(self._hvac_mode, reason)
+                    return
+            await self._restore_thermostats()
+            self.async_write_ha_state()
             return
         if self._preset_mode == PRESET_MANUAL:
             self._preset_mode = PRESET_AUTO
@@ -872,10 +978,10 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         if pump is not None and pump.state == mode.value:
             self._active_mode = mode
             self._last_transition = time()
-            if mode == HVACMode.OFF:
-                await self._restore_thermostats()
-            else:
+            if mode in (HVACMode.HEAT, HVACMode.COOL):
                 await self._disable_thermostats()
+            else:
+                await self._restore_thermostats()
             return
         self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
         await self.hass.services.async_call(
@@ -890,10 +996,10 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         self._last_command_reason = reason
         self._active_mode = mode
         self._last_transition = time()
-        if mode == HVACMode.OFF:
-            await self._restore_thermostats()
-        else:
+        if mode in (HVACMode.HEAT, HVACMode.COOL):
             await self._disable_thermostats()
+        else:
+            await self._restore_thermostats()
         self.async_write_ha_state()
 
     async def _disable_thermostats(self) -> None:

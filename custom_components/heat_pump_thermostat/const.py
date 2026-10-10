@@ -40,4 +40,4 @@ OPENING_STAGE_NONE = "none"
 OPENING_STAGE_MIN = "min"
 OPENING_STAGE_OFF = "off"
 
-PLATFORMS = ["climate"]
+PLATFORMS = ["climate", "select"]

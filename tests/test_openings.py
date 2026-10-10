@@ -34,6 +34,10 @@ class FakePump:
         self.reject_heat_below = reject_heat_below
         self.state = "heat"
         self.target = 25.0
+        self.fan = "auto"
+        self.swing = "off"
+        self.swing_h = "off"
+        self.preset = "comfort"
         self.calls: list[tuple[str, object]] = []
         self.publish()
 
@@ -42,12 +46,34 @@ class FakePump:
         # services replace the real ones for the stub pump entity.
         self.hass.services.async_register("climate", "set_temperature", self._set_temperature)
         self.hass.services.async_register("climate", "set_hvac_mode", self._set_hvac_mode)
+        for service, attr, key in (
+            ("set_fan_mode", "fan", "fan_mode"),
+            ("set_swing_mode", "swing", "swing_mode"),
+            ("set_swing_horizontal_mode", "swing_h", "swing_horizontal_mode"),
+            ("set_preset_mode", "preset", "preset_mode"),
+        ):
+            self.hass.services.async_register("climate", service, self._setter(attr, key))
+
+    def _setter(self, attr, key):
+        async def handler(call) -> None:
+            self.calls.append((key, call.data[key]))
+            setattr(self, attr, call.data[key])
+            self.publish(call.context)
+
+        return handler
 
     def publish(self, context=None) -> None:
         self.hass.states.async_set(
             PUMP,
             self.state,
-            {"min_temp": 16, "max_temp": 32, "temperature": self.target, "current_temperature": 20},
+            {
+                "min_temp": 16, "max_temp": 32, "temperature": self.target, "current_temperature": 20,
+                "hvac_modes": ["off", "cool", "heat", "dry", "fan_only", "heat_cool"],
+                "fan_modes": ["low", "medium", "high", "auto"], "fan_mode": self.fan,
+                "swing_modes": ["off", "on"], "swing_mode": self.swing,
+                "swing_horizontal_modes": ["on", "off"], "swing_horizontal_mode": self.swing_h,
+                "preset_modes": ["eco", "comfort"], "preset_mode": self.preset,
+            },
             context=context,
         )
 
@@ -253,3 +279,64 @@ async def test_user_command_on_unit_is_manual_even_right_after_our_command(hass,
     assert entity.hvac_mode == "heat"
     assert attrs["active_mode"] == "heat"
     assert entity.preset_mode == "manual"
+
+
+async def test_fan_and_swing_pass_through(hass, clock):
+    from homeassistant.components.climate import ClimateEntityFeature
+
+    pump, entity = await _setup(hass, clock)
+    assert entity.supported_features & ClimateEntityFeature.FAN_MODE
+    assert entity.supported_features & ClimateEntityFeature.SWING_MODE
+    assert entity.fan_modes == ["low", "medium", "high", "auto"]
+    await entity.async_set_fan_mode("high")
+    await entity.async_set_swing_mode("on")
+    await entity.async_set_swing_horizontal_mode("on")
+    await hass.async_block_till_done()
+    assert (pump.fan, pump.swing, pump.swing_h) == ("high", "on", "on")
+    assert entity.fan_mode == "high" and entity.swing_mode == "on"
+    # Passing settings through is not a manual override.
+    assert entity.preset_mode == "auto"
+
+
+async def test_dry_mode_and_door_staging(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    assert "dry" in entity.hvac_modes and "fan_only" in entity.hvac_modes
+    await entity.async_set_hvac_mode("dry")
+    await hass.async_block_till_done()
+    assert pump.state == "dry"
+    assert entity.hvac_action == "drying"
+    await _set_door(hass, "on")
+    await _tick(hass, entity, clock, 6)
+    assert pump.state == "dry"  # no turn-down stage for dry/fan
+    await _tick(hass, entity, clock, 15)
+    assert pump.state == "off"
+    await _set_door(hass, "off")
+    await _tick(hass, entity, clock, 10.5)
+    await _tick(hass, entity, clock, 0.5)
+    assert pump.state == "dry"
+
+
+async def test_unit_preset_select(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    ids = [s.entity_id for s in hass.states.async_all("select")]
+    assert ids, ids
+    sel = ids[0]
+    state = hass.states.get(sel)
+    assert state.state == "comfort", (sel, state)
+    await hass.services.async_call(
+        "select", "select_option",
+        {"entity_id": sel, "option": "eco"}, blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert pump.preset == "eco"
+    assert hass.states.get(sel).state == "eco"
+
+
+async def test_dry_chosen_on_unit_becomes_thermostat_mode(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    clock.advance(3)  # past the echo guard of our own start command
+    pump.state = "dry"
+    pump.publish()
+    await hass.async_block_till_done()
+    assert entity.hvac_mode == "dry"
+    assert entity.extra_state_attributes["active_mode"] == "dry"

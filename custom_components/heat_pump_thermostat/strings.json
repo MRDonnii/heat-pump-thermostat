@@ -63,5 +63,16 @@
       "cool_must_exceed_heat": "The cooling target must be higher than the heating target.",
       "off_before_min": "The switch-off delay must be at least the turn-down delay."
     }
+  },
+  "entity": {
+    "select": {
+      "unit_preset": {
+        "name": "Unit preset",
+        "state": {
+          "eco": "Eco",
+          "comfort": "Comfort"
+        }
+      }
+    }
   }
 }

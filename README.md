@@ -19,6 +19,7 @@ A Home Assistant custom integration that creates a virtual climate entity for an
 - Treats a physical `off` command as a persistent stop: the virtual thermostat stays off until the user explicitly turns it on again.
 - Can optionally pause selected climate entities while the heat pump is actively heating or cooling. The list may be left empty.
 - Restores setpoints and controller state after a Home Assistant restart.
+- Passes the unit's own controls through the thermostat: fan speed, vertical and horizontal swing, dry and fan-only modes, and the unit's preset (e.g. eco/comfort) as a select entity on the thermostat device.
 - Exposes diagnostic attributes such as active mode, neutral mode, pending mode, opening pause, command counters, and paused thermostats.
 - Supports multiple independent heat pumps by adding the integration once per unit.
 
@@ -77,6 +78,12 @@ Report problems and feature requests in [GitHub Issues](https://github.com/MRDon
 MIT
 
 ## Changelog
+
+### 0.3.0
+- Fan mode, vertical and horizontal swing are mirrored from and passed through to the physical unit.
+- Dry and fan-only modes (when the unit supports them) are handed to the unit directly; a door/window that stays open long still switches them off. Choosing one of them on the unit itself becomes the thermostat mode.
+- New select entity on the thermostat device for the unit's own preset (eco/comfort).
+- Radiator thermostats are only paused while the heat pump heats or cools.
 
 ### 0.2.1
 - Turning the thermostat on yourself starts the heat pump at once; the minimum off time only holds back automatic restarts (the unit has its own compressor protection).
