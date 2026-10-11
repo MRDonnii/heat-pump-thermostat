@@ -77,6 +77,10 @@ _OPENING_STARTUP_GRACE_SECONDS = 90
 # as rejected. Some units silently ignore their advertised minimum/maximum.
 _TARGET_CONFIRM_SECONDS = 10
 _TARGET_CONFIRM_ATTEMPTS = 4
+# Midea UART (ESPHome) silently drops a command that arrives while the
+# previous one is still waiting for the unit's reply, so pump commands are
+# serialised with a gap between them.
+_PUMP_COMMAND_GAP_SECONDS = 3
 # Modes passed straight to the unit without temperature regulation.
 _DIRECT_MODES = (HVACMode.DRY, HVACMode.FAN_ONLY)
 _SWING_HORIZONTAL = getattr(ClimateEntityFeature, "SWING_HORIZONTAL_MODE", None)
@@ -155,6 +159,8 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         self._command_count_temperature = 0
         self._last_command_reason = "none"
         self._command_context = Context()
+        self._pump_lock = asyncio.Lock()
+        self._last_pump_command = 0.0
         self._observed_pump_target: float | None = None
         self._startup_time = time()
         self._started = False
@@ -256,16 +262,27 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
     def swing_horizontal_mode(self):
         return self._pump_attr("swing_horizontal_mode")
 
+    async def _pump_call(self, service: str, data: dict[str, Any]) -> None:
+        """Send one command to the physical unit, spaced from the previous one."""
+        async with self._pump_lock:
+            wait = self._last_pump_command + _PUMP_COMMAND_GAP_SECONDS - time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                await self.hass.services.async_call(
+                    "climate",
+                    service,
+                    {"entity_id": self._heat_pump, **data},
+                    blocking=True,
+                    context=self._command_context,
+                )
+            finally:
+                self._last_pump_command = time()
+
     async def _forward(self, service: str, data: dict[str, Any]) -> None:
         """Pass a setting straight through to the physical unit."""
         self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
-        await self.hass.services.async_call(
-            "climate",
-            service,
-            {"entity_id": self._heat_pump, **data},
-            blocking=True,
-            context=self._command_context,
-        )
+        await self._pump_call(service, data)
         self.async_write_ha_state()
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
@@ -993,13 +1010,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         for attempt in range(_TARGET_CONFIRM_ATTEMPTS if step_towards_comfort else 1):
             target = float(max(lo, min(hi, target)))
             self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
-            await self.hass.services.async_call(
-                "climate",
-                "set_temperature",
-                {"entity_id": self._heat_pump, ATTR_TEMPERATURE: target},
-                blocking=True,
-                context=self._command_context,
-            )
+            await self._pump_call("set_temperature", {ATTR_TEMPERATURE: target})
             self._command_count_temperature += 1
             self._observed_pump_target = target
             self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
@@ -1046,13 +1057,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             target_matches = False
         self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
         if physical_mode != neutral_mode:
-            await self.hass.services.async_call(
-                "climate",
-                "set_hvac_mode",
-                {"entity_id": self._heat_pump, "hvac_mode": neutral_mode.value},
-                blocking=True,
-                context=self._command_context,
-            )
+            await self._pump_call("set_hvac_mode", {"hvac_mode": neutral_mode.value})
             self._command_count_mode += 1
             self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
         if not target_matches:
@@ -1093,13 +1098,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         except (TypeError, ValueError):
             pass
         self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
-        await self.hass.services.async_call(
-            "climate",
-            "set_temperature",
-            {"entity_id": self._heat_pump, ATTR_TEMPERATURE: desired},
-            blocking=True,
-            context=self._command_context,
-        )
+        await self._pump_call("set_temperature", {ATTR_TEMPERATURE: desired})
         self._command_count_temperature += 1
         self._observed_pump_target = desired
         self._last_command = time()
@@ -1117,13 +1116,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
                 await self._restore_thermostats()
             return
         self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
-        await self.hass.services.async_call(
-            "climate",
-            "set_hvac_mode",
-            {"entity_id": self._heat_pump, "hvac_mode": mode.value},
-            blocking=True,
-            context=self._command_context,
-        )
+        await self._pump_call("set_hvac_mode", {"hvac_mode": mode.value})
         self._command_count_mode += 1
         self._last_command = time()
         self._last_command_reason = reason
