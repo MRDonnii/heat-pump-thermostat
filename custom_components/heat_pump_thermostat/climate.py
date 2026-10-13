@@ -77,6 +77,8 @@ _OPENING_STARTUP_GRACE_SECONDS = 90
 # as rejected. Some units silently ignore their advertised minimum/maximum.
 _TARGET_CONFIRM_SECONDS = 10
 _TARGET_CONFIRM_ATTEMPTS = 4
+# While heating/cooling, re-check the compensated unit target this often.
+_RETARGET_SECONDS = 300
 # Midea UART (ESPHome) silently drops a command that arrives while the
 # previous one is still waiting for the unit's reply, so pump commands are
 # serialised with a gap between them.
@@ -141,6 +143,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         self._sensor_stable_since = time()
         self._last_transition = time()
         self._last_command = 0.0
+        self._last_retarget = 0.0
         self._command_guard_until = 0.0
         self._manual_until = 0.0
         self._sensor_unavailable_since: float | None = None
@@ -909,6 +912,16 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
                 await self._restore_thermostats()
             else:
                 await self._disable_thermostats()
+                if (
+                    self._compensate
+                    and desired in (HVACMode.HEAT, HVACMode.COOL)
+                    and now - self._last_retarget >= _RETARGET_SECONDS
+                    and now > self._command_guard_until
+                ):
+                    # The unit regulates on its own (often much warmer) sensor
+                    # and idles once that reaches its target. Keep the target
+                    # compensated while running, not only at start.
+                    await self._prepare_setpoint(desired, reason=f"retarget_{desired.value}")
             self.async_write_ha_state()
             return
         # A deliberate setpoint reduction must feel immediate. Holding the
@@ -1071,11 +1084,12 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         await self._restore_thermostats()
         self.async_write_ha_state()
 
-    async def _prepare_setpoint(self, mode: HVACMode) -> None:
+    async def _prepare_setpoint(self, mode: HVACMode, reason: str | None = None) -> None:
         pump = self.hass.states.get(self._heat_pump)
         if pump is None:
             return
         self._neutral_mode = None
+        self._last_retarget = time()
         desired = self._heat_target if mode == HVACMode.HEAT else self._cool_target
         if self._compensate:
             internal = pump.attributes.get("current_temperature")
@@ -1102,7 +1116,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         self._command_count_temperature += 1
         self._observed_pump_target = desired
         self._last_command = time()
-        self._last_command_reason = f"prepare_{mode.value}"
+        self._last_command_reason = reason or f"prepare_{mode.value}"
 
     async def _apply_mode(self, mode: HVACMode, reason: str) -> None:
         self._neutral_mode = None

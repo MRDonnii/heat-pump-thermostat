@@ -81,6 +81,9 @@ MIT
 
 ## Changelog
 
+### 0.4.4
+- While heating or cooling, the unit's target is re-compensated every 5 minutes (target + unit sensor − room sensor). Units that regulate on their own, much warmer sensor no longer idle while the room is still below target.
+
 ### 0.4.3
 - Commands to the physical unit are sent one at a time with a short gap. ESPHome's Midea UART component drops a command that arrives while the previous one is still waiting for the unit's reply, so a target change followed directly by a mode change never turned the unit on.
 

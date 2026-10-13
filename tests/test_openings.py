@@ -34,6 +34,7 @@ class FakePump:
         self.reject_heat_below = reject_heat_below
         self.state = "heat"
         self.target = 25.0
+        self.internal = 20
         self.fan = "auto"
         self.swing = "off"
         self.swing_h = "off"
@@ -67,7 +68,7 @@ class FakePump:
             PUMP,
             self.state,
             {
-                "min_temp": 16, "max_temp": 32, "temperature": self.target, "current_temperature": 20,
+                "min_temp": 16, "max_temp": 32, "temperature": self.target, "current_temperature": self.internal,
                 "hvac_modes": ["off", "cool", "heat", "dry", "fan_only", "heat_cool"],
                 "fan_modes": ["low", "medium", "high", "auto"], "fan_mode": self.fan,
                 "swing_modes": ["off", "on"], "swing_mode": self.swing,
@@ -455,3 +456,20 @@ async def test_single_setpoint_outside_heat_cool(hass, clock):
     assert state.attributes.get("target_temp_low") == 22
     assert state.attributes.get("target_temp_high") == 25
     assert state.attributes.get("temperature") is None
+
+
+async def test_unit_target_follows_its_own_warm_sensor_while_heating(hass, clock):
+    """The unit idles when its own sensor reaches its target; keep it compensated."""
+    pump, entity = await _setup(hass, clock, room_temp=19.0)
+    assert entity.extra_state_attributes["active_mode"] == "heat"
+    start_target = pump.target
+    # The unit's own sensor climbs well above the room while the room stays cold.
+    pump.internal = 28
+    pump.publish()
+    await hass.async_block_till_done()
+    await _tick(hass, entity, clock, 0.5)
+    assert pump.target == start_target  # not before the re-check interval
+    await _tick(hass, entity, clock, 5)
+    # 22 target + (28 unit - 19 room) = 31, capped at the unit's max (32).
+    assert pump.target == 31
+    assert entity.extra_state_attributes["last_command_reason"] == "retarget_heat"
