@@ -105,7 +105,7 @@ def clock():
         yield c
 
 
-async def _setup(hass, clock, room_temp: float = 19.0):
+async def _setup(hass, clock, room_temp: float = 19.0, **extra):
     pump = FakePump(hass)
     hass.states.async_set(SENSOR, str(room_temp), {"unit_of_measurement": "°C"})
     hass.states.async_set(DOOR, "off")
@@ -121,6 +121,7 @@ async def _setup(hass, clock, room_temp: float = 19.0):
             "cool_target": 25,
             "min_run_minutes": 20,
             "min_off_minutes": 10,
+            "opening_reduce_to": extra.get("reduce_to", "minimum"),
         },
     )
     entry.add_to_hass(hass)
@@ -507,3 +508,19 @@ async def test_lost_mode_is_repaired_in_steady_state(hass, clock):
     await _tick(hass, entity, clock, 2)
     assert pump.state == "heat"
     assert entity.extra_state_attributes["last_command_reason"] == "mode_repair"
+
+
+async def test_door_turn_down_to_setpoint_by_default(hass, clock):
+    pump, entity = await _setup(hass, clock, reduce_to="setpoint")
+    await _set_door(hass, "on")
+    await _tick(hass, entity, clock, 6)
+    attrs = entity.extra_state_attributes
+    assert attrs["opening_stage"] == "min"
+    assert pump.state == "heat"
+    assert pump.target == 22  # the setpoint, not the unit minimum
+    assert ("temperature", 16.0) not in pump.calls
+    # Stays there (no repair loop back to the minimum).
+    await _tick(hass, entity, clock, 3)
+    assert pump.target == 22
+    await _tick(hass, entity, clock, 12)
+    assert pump.state == "off"

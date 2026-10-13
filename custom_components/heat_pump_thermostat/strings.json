@@ -22,7 +22,8 @@
           "manual_override_minutes": "Remote-control override (minutes)",
           "setpoint_compensation": "Compensate the heat-pump setpoint from the external sensor",
           "opening_min_delay_minutes": "Minutes an opening must be open before the heat pump is turned down to minimum",
-          "opening_off_delay_minutes": "Minutes an opening must be open before the heat pump is switched off"
+          "opening_off_delay_minutes": "Minutes an opening must be open before the heat pump is switched off",
+          "opening_reduce_to": "Turn down to, while a door/window is open"
         }
       }
     },
@@ -55,7 +56,8 @@
           "manual_override_minutes": "Remote-control override (minutes)",
           "setpoint_compensation": "Compensate the heat-pump setpoint from the external sensor",
           "opening_min_delay_minutes": "Minutes an opening must be open before the heat pump is turned down to minimum",
-          "opening_off_delay_minutes": "Minutes an opening must be open before the heat pump is switched off"
+          "opening_off_delay_minutes": "Minutes an opening must be open before the heat pump is switched off",
+          "opening_reduce_to": "Turn down to, while a door/window is open"
         }
       }
     },
@@ -177,6 +179,14 @@
             "name": "Next change"
           }
         }
+      }
+    }
+  },
+  "selector": {
+    "opening_reduce_to": {
+      "options": {
+        "setpoint": "The setpoint (keeps a little heat/cooling)",
+        "minimum": "The unit's minimum/maximum (practically stops)"
       }
     }
   }

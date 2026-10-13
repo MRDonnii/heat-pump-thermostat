@@ -10,6 +10,7 @@ CONF_OPENING_OFF_DELAY_SECONDS = "opening_off_delay_seconds"  # legacy (<= 0.1.x
 CONF_OPENING_MIN_DELAY_MINUTES = "opening_min_delay_minutes"
 CONF_OPENING_OFF_DELAY_MINUTES = "opening_off_delay_minutes"
 CONF_OPENING_RESUME_DELAY_MINUTES = "opening_resume_delay_minutes"
+CONF_OPENING_REDUCE_TO = "opening_reduce_to"
 CONF_HEAT_TARGET = "heat_target"
 CONF_COOL_TARGET = "cool_target"
 CONF_HYSTERESIS = "hysteresis"
@@ -32,6 +33,10 @@ DEFAULT_OPENING_OFF_DELAY_SECONDS = 120  # legacy
 DEFAULT_OPENING_MIN_DELAY_MINUTES = 5
 DEFAULT_OPENING_OFF_DELAY_MINUTES = 20
 DEFAULT_OPENING_RESUME_DELAY_MINUTES = 10
+# What the unit is turned down to while a door/window is open (before switch-off).
+OPENING_REDUCE_SETPOINT = "setpoint"
+OPENING_REDUCE_MINIMUM = "minimum"
+DEFAULT_OPENING_REDUCE_TO = OPENING_REDUCE_SETPOINT
 
 PRESET_AUTO = "auto"
 PRESET_MANUAL = "manual"

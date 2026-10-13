@@ -20,6 +20,7 @@ from .const import (
     CONF_OPENING_SENSORS,
     CONF_OPENING_MIN_DELAY_MINUTES,
     CONF_OPENING_OFF_DELAY_MINUTES,
+    CONF_OPENING_REDUCE_TO,
     CONF_OPENING_RESUME_DELAY_MINUTES,
     CONF_SENSOR_STABLE_SECONDS,
     CONF_SENSOR_LOSS_GRACE_SECONDS,
@@ -34,7 +35,10 @@ from .const import (
     DEFAULT_MIN_RUN_MINUTES,
     DEFAULT_OPENING_MIN_DELAY_MINUTES,
     DEFAULT_OPENING_OFF_DELAY_MINUTES,
+    DEFAULT_OPENING_REDUCE_TO,
     DEFAULT_OPENING_RESUME_DELAY_MINUTES,
+    OPENING_REDUCE_MINIMUM,
+    OPENING_REDUCE_SETPOINT,
     DEFAULT_SENSOR_STABLE_SECONDS,
     DEFAULT_SENSOR_LOSS_GRACE_SECONDS,
     DOMAIN,
@@ -86,6 +90,15 @@ def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                     CONF_OPENING_OFF_DELAY_MINUTES, DEFAULT_OPENING_OFF_DELAY_MINUTES
                 ),
             ): vol.All(vol.Coerce(int), vol.Range(min=0, max=600)),
+            vol.Required(
+                CONF_OPENING_REDUCE_TO,
+                default=value(CONF_OPENING_REDUCE_TO, DEFAULT_OPENING_REDUCE_TO),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[OPENING_REDUCE_SETPOINT, OPENING_REDUCE_MINIMUM],
+                    translation_key="opening_reduce_to",
+                )
+            ),
             vol.Required(
                 CONF_OPENING_RESUME_DELAY_MINUTES,
                 default=value(

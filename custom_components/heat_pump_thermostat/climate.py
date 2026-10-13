@@ -35,6 +35,7 @@ from .const import (
     CONF_OPENING_SENSORS,
     CONF_OPENING_MIN_DELAY_MINUTES,
     CONF_OPENING_OFF_DELAY_MINUTES,
+    CONF_OPENING_REDUCE_TO,
     CONF_OPENING_RESUME_DELAY_MINUTES,
     CONF_SENSOR_STABLE_SECONDS,
     CONF_SENSOR_LOSS_GRACE_SECONDS,
@@ -57,10 +58,12 @@ from .const import (
     DEFAULT_MIN_RUN_MINUTES,
     DEFAULT_OPENING_MIN_DELAY_MINUTES,
     DEFAULT_OPENING_OFF_DELAY_MINUTES,
+    DEFAULT_OPENING_REDUCE_TO,
     DEFAULT_OPENING_RESUME_DELAY_MINUTES,
     DEFAULT_SENSOR_STABLE_SECONDS,
     DEFAULT_SENSOR_LOSS_GRACE_SECONDS,
     DOMAIN,
+    OPENING_REDUCE_SETPOINT,
     OPENING_STAGE_MIN,
     OPENING_STAGE_NONE,
     OPENING_STAGE_OFF,
@@ -144,6 +147,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         self._last_transition = time()
         self._last_command = 0.0
         self._last_retarget = 0.0
+        self._neutral_value: float | None = None
         self._command_guard_until = 0.0
         self._manual_until = 0.0
         self._sensor_unavailable_since: float | None = None
@@ -207,6 +211,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             cfg.get(CONF_MANUAL_OVERRIDE_MINUTES, DEFAULT_MANUAL_OVERRIDE_MINUTES)
         ) * 60
         self._compensate = bool(cfg.get(CONF_SETPOINT_COMPENSATION, True))
+        self._opening_reduce_to = cfg.get(CONF_OPENING_REDUCE_TO, DEFAULT_OPENING_REDUCE_TO)
 
     @property
     def hvac_mode(self):
@@ -996,6 +1001,13 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         advertised = float(pump.attributes.get("max_temp", 32))
         return min(advertised, learned) if learned is not None else advertised
 
+    def _setpoint_target(self, mode: HVACMode, pump: State) -> float:
+        """The room setpoint itself (uncompensated), within the unit's range."""
+        lo = self._neutral_target(HVACMode.HEAT, pump)
+        hi = self._neutral_target(HVACMode.COOL, pump)
+        target = self._heat_target if mode == HVACMode.HEAT else self._cool_target
+        return float(round(max(lo, min(hi, target))))
+
     def _pump_matches_neutral(self) -> bool:
         pump = self.hass.states.get(self._heat_pump)
         if pump is None or self._neutral_mode is None:
@@ -1005,7 +1017,12 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         if pump.state != self._neutral_mode.value:
             return False
         try:
-            return abs(float(pump.attributes.get("temperature")) - self._neutral_target(self._neutral_mode, pump)) < 1
+            expected = (
+                self._neutral_value
+                if self._neutral_value is not None
+                else self._neutral_target(self._neutral_mode, pump)
+            )
+            return abs(float(pump.attributes.get("temperature")) - expected) < 1
         except (TypeError, ValueError):
             return False
 
@@ -1081,7 +1098,10 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         else:
             neutral_mode = HVACMode.COOL if self._hvac_mode == HVACMode.COOL else HVACMode.HEAT
 
-        neutral_target = self._neutral_target(neutral_mode, pump)
+        if reason == "opening_reduce" and self._opening_reduce_to == OPENING_REDUCE_SETPOINT:
+            neutral_target = self._setpoint_target(neutral_mode, pump)
+        else:
+            neutral_target = self._neutral_target(neutral_mode, pump)
         current_target = pump.attributes.get("temperature")
         try:
             target_matches = abs(float(current_target) - neutral_target) < 1
@@ -1093,7 +1113,12 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             self._command_count_mode += 1
             self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
         if not target_matches:
-            await self._set_pump_target(neutral_target, neutral_mode, step_towards_comfort=True)
+            accepted = await self._set_pump_target(
+                neutral_target, neutral_mode, step_towards_comfort=True
+            )
+            if accepted is not None:
+                neutral_target = accepted
+        self._neutral_value = neutral_target
         self._last_command = time()
         self._last_command_reason = reason
         self._neutral_mode = neutral_mode

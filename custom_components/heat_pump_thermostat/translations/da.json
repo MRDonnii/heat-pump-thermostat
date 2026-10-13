@@ -22,7 +22,8 @@
           "manual_override_minutes": "Manuel fjernbetjeningsperiode (minutter)",
           "setpoint_compensation": "Kompenser varmepumpens setpunkt efter den eksterne føler",
           "opening_min_delay_minutes": "Minutter et vindue/en dør skal være åben, før varmepumpen skrues ned til minimum",
-          "opening_off_delay_minutes": "Minutter et vindue/en dør skal være åben, før varmepumpen slukkes helt"
+          "opening_off_delay_minutes": "Minutter et vindue/en dør skal være åben, før varmepumpen slukkes helt",
+          "opening_reduce_to": "Skru ned til, mens et vindue/en dør er åben"
         }
       }
     },
@@ -55,7 +56,8 @@
           "manual_override_minutes": "Manuel fjernbetjeningsperiode (minutter)",
           "setpoint_compensation": "Kompenser varmepumpens setpunkt efter den eksterne føler",
           "opening_min_delay_minutes": "Minutter et vindue/en dør skal være åben, før varmepumpen skrues ned til minimum",
-          "opening_off_delay_minutes": "Minutter et vindue/en dør skal være åben, før varmepumpen slukkes helt"
+          "opening_off_delay_minutes": "Minutter et vindue/en dør skal være åben, før varmepumpen slukkes helt",
+          "opening_reduce_to": "Skru ned til, mens et vindue/en dør er åben"
         }
       }
     },
@@ -177,6 +179,14 @@
             "name": "Næste skift"
           }
         }
+      }
+    }
+  },
+  "selector": {
+    "opening_reduce_to": {
+      "options": {
+        "setpoint": "Setpunktet (holder lidt varme/køl)",
+        "minimum": "Enhedens minimum/maksimum (stopper reelt)"
       }
     }
   }

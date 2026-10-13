@@ -81,6 +81,9 @@ MIT
 
 ## Changelog
 
+### 0.4.6
+- New option *Turn down to, while a door/window is open*: `setpoint` (default) turns the unit down to the room setpoint itself, which keeps a little heat/cooling because the unit's own sensor usually reads above the room; `minimum` keeps the old behaviour (lowest accepted heating target / highest cooling target). The switch-off after the off delay is unchanged.
+
 ### 0.4.5
 - Mode changes are confirmed: if the unit does not report the new mode within 10 seconds, the command is sent again (up to 3 times).
 - If the thermostat is heating/cooling but the unit is found in another mode, the mode is resent (`mode_repair`). Fixes a unit staying off after a door/window pause or a release.
