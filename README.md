@@ -81,6 +81,9 @@ MIT
 
 ## Changelog
 
+### 0.4.7
+- Separate start margin (default 0.1 °C): heating starts when the room is 0.1 °C below the target (cooling 0.1 °C above), while the existing hysteresis (default 0.5 °C) still decides when to stop past the target.
+
 ### 0.4.6
 - New option *Turn down to, while a door/window is open*: `setpoint` (default) turns the unit down to the room setpoint itself, which keeps a little heat/cooling because the unit's own sensor usually reads above the room; `minimum` keeps the old behaviour (lowest accepted heating target / highest cooling target). The switch-off after the off delay is unchanged.
 

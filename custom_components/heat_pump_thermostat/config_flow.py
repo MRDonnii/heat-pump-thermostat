@@ -14,6 +14,7 @@ from .const import (
     CONF_HEAT_PUMP,
     CONF_HEAT_TARGET,
     CONF_HYSTERESIS,
+    CONF_START_HYSTERESIS,
     CONF_MANUAL_OVERRIDE_MINUTES,
     CONF_MIN_OFF_MINUTES,
     CONF_MIN_RUN_MINUTES,
@@ -30,6 +31,7 @@ from .const import (
     DEFAULT_COOL_TARGET,
     DEFAULT_HEAT_TARGET,
     DEFAULT_HYSTERESIS,
+    DEFAULT_START_HYSTERESIS,
     DEFAULT_MANUAL_OVERRIDE_MINUTES,
     DEFAULT_MIN_OFF_MINUTES,
     DEFAULT_MIN_RUN_MINUTES,
@@ -115,6 +117,12 @@ def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 CONF_COOL_TARGET, default=value(CONF_COOL_TARGET, DEFAULT_COOL_TARGET)
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=18, max=32, step=1, unit_of_measurement="°C")
+            ),
+            vol.Required(
+                CONF_START_HYSTERESIS,
+                default=value(CONF_START_HYSTERESIS, DEFAULT_START_HYSTERESIS),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.0, max=2.0, step=0.1, unit_of_measurement="°C")
             ),
             vol.Required(
                 CONF_HYSTERESIS, default=value(CONF_HYSTERESIS, DEFAULT_HYSTERESIS)

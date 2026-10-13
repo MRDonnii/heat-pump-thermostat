@@ -14,6 +14,9 @@ CONF_OPENING_REDUCE_TO = "opening_reduce_to"
 CONF_HEAT_TARGET = "heat_target"
 CONF_COOL_TARGET = "cool_target"
 CONF_HYSTERESIS = "hysteresis"
+# Margin below (heat) / above (cool) the target that starts the unit. The
+# normal hysteresis is the margin past the target that stops it.
+CONF_START_HYSTERESIS = "start_hysteresis"
 CONF_MIN_RUN_MINUTES = "min_run_minutes"
 CONF_MIN_OFF_MINUTES = "min_off_minutes"
 CONF_SENSOR_STABLE_SECONDS = "sensor_stable_seconds"
@@ -24,6 +27,7 @@ CONF_SETPOINT_COMPENSATION = "setpoint_compensation"
 DEFAULT_HEAT_TARGET = 21.0
 DEFAULT_COOL_TARGET = 24.0
 DEFAULT_HYSTERESIS = 0.5
+DEFAULT_START_HYSTERESIS = 0.1
 DEFAULT_MIN_RUN_MINUTES = 20
 DEFAULT_MIN_OFF_MINUTES = 10
 DEFAULT_SENSOR_STABLE_SECONDS = 120

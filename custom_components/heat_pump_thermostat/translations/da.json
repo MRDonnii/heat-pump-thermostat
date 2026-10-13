@@ -14,7 +14,7 @@
           "opening_resume_delay_minutes": "Minutter alle vinduer/døre skal være lukket, før normal styring genoptages",
           "heat_target": "Standard varmemål",
           "cool_target": "Standard kølemål",
-          "hysteresis": "Hysterese",
+          "hysteresis": "Stopmargin: stop når rummet er så meget forbi målet",
           "min_run_minutes": "Mindste driftstid (minutter)",
           "min_off_minutes": "Mindste pausetid (minutter)",
           "sensor_stable_seconds": "Følerens stabilitetstid (sekunder)",
@@ -23,7 +23,8 @@
           "setpoint_compensation": "Kompenser varmepumpens setpunkt efter den eksterne føler",
           "opening_min_delay_minutes": "Minutter et vindue/en dør skal være åben, før varmepumpen skrues ned til minimum",
           "opening_off_delay_minutes": "Minutter et vindue/en dør skal være åben, før varmepumpen slukkes helt",
-          "opening_reduce_to": "Skru ned til, mens et vindue/en dør er åben"
+          "opening_reduce_to": "Skru ned til, mens et vindue/en dør er åben",
+          "start_hysteresis": "Startmargin: start når rummet er så meget under (varme) / over (køl) målet"
         }
       }
     },
@@ -48,7 +49,7 @@
           "opening_resume_delay_minutes": "Minutter alle vinduer/døre skal være lukket, før normal styring genoptages",
           "heat_target": "Standard varmemål",
           "cool_target": "Standard kølemål",
-          "hysteresis": "Hysterese",
+          "hysteresis": "Stopmargin: stop når rummet er så meget forbi målet",
           "min_run_minutes": "Mindste driftstid (minutter)",
           "min_off_minutes": "Mindste pausetid (minutter)",
           "sensor_stable_seconds": "Følerens stabilitetstid (sekunder)",
@@ -57,7 +58,8 @@
           "setpoint_compensation": "Kompenser varmepumpens setpunkt efter den eksterne føler",
           "opening_min_delay_minutes": "Minutter et vindue/en dør skal være åben, før varmepumpen skrues ned til minimum",
           "opening_off_delay_minutes": "Minutter et vindue/en dør skal være åben, før varmepumpen slukkes helt",
-          "opening_reduce_to": "Skru ned til, mens et vindue/en dør er åben"
+          "opening_reduce_to": "Skru ned til, mens et vindue/en dør er åben",
+          "start_hysteresis": "Startmargin: start når rummet er så meget under (varme) / over (køl) målet"
         }
       }
     },

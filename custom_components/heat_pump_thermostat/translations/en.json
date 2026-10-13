@@ -14,7 +14,7 @@
           "opening_resume_delay_minutes": "Minutes all openings must stay closed before normal control resumes",
           "heat_target": "Default heating target",
           "cool_target": "Default cooling target",
-          "hysteresis": "Hysteresis",
+          "hysteresis": "Stop margin: stop when the room is this much past the target",
           "min_run_minutes": "Minimum run time (minutes)",
           "min_off_minutes": "Minimum off time (minutes)",
           "sensor_stable_seconds": "Sensor stability time (seconds)",
@@ -23,7 +23,8 @@
           "setpoint_compensation": "Compensate the heat-pump setpoint from the external sensor",
           "opening_min_delay_minutes": "Minutes an opening must be open before the heat pump is turned down to minimum",
           "opening_off_delay_minutes": "Minutes an opening must be open before the heat pump is switched off",
-          "opening_reduce_to": "Turn down to, while a door/window is open"
+          "opening_reduce_to": "Turn down to, while a door/window is open",
+          "start_hysteresis": "Start margin: start when the room is this much below (heat) / above (cool) the target"
         }
       }
     },
@@ -48,7 +49,7 @@
           "opening_resume_delay_minutes": "Minutes all openings must stay closed before normal control resumes",
           "heat_target": "Default heating target",
           "cool_target": "Default cooling target",
-          "hysteresis": "Hysteresis",
+          "hysteresis": "Stop margin: stop when the room is this much past the target",
           "min_run_minutes": "Minimum run time (minutes)",
           "min_off_minutes": "Minimum off time (minutes)",
           "sensor_stable_seconds": "Sensor stability time (seconds)",
@@ -57,7 +58,8 @@
           "setpoint_compensation": "Compensate the heat-pump setpoint from the external sensor",
           "opening_min_delay_minutes": "Minutes an opening must be open before the heat pump is turned down to minimum",
           "opening_off_delay_minutes": "Minutes an opening must be open before the heat pump is switched off",
-          "opening_reduce_to": "Turn down to, while a door/window is open"
+          "opening_reduce_to": "Turn down to, while a door/window is open",
+          "start_hysteresis": "Start margin: start when the room is this much below (heat) / above (cool) the target"
         }
       }
     },

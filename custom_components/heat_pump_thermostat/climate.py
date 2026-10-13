@@ -29,6 +29,7 @@ from .const import (
     CONF_HEAT_PUMP,
     CONF_HEAT_TARGET,
     CONF_HYSTERESIS,
+    CONF_START_HYSTERESIS,
     CONF_MANUAL_OVERRIDE_MINUTES,
     CONF_MIN_OFF_MINUTES,
     CONF_MIN_RUN_MINUTES,
@@ -53,6 +54,7 @@ from .const import (
     DEFAULT_COOL_TARGET,
     DEFAULT_HEAT_TARGET,
     DEFAULT_HYSTERESIS,
+    DEFAULT_START_HYSTERESIS,
     DEFAULT_MANUAL_OVERRIDE_MINUTES,
     DEFAULT_MIN_OFF_MINUTES,
     DEFAULT_MIN_RUN_MINUTES,
@@ -196,6 +198,7 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
         self._heat_target = _whole(cfg.get(CONF_HEAT_TARGET, self._heat_target))
         self._cool_target = _whole(cfg.get(CONF_COOL_TARGET, self._cool_target))
         self._hysteresis = float(cfg.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS))
+        self._start_hysteresis = float(cfg.get(CONF_START_HYSTERESIS, DEFAULT_START_HYSTERESIS))
         self._min_run = float(cfg.get(CONF_MIN_RUN_MINUTES, DEFAULT_MIN_RUN_MINUTES)) * 60
         self._min_off = float(cfg.get(CONF_MIN_OFF_MINUTES, DEFAULT_MIN_OFF_MINUTES)) * 60
         self._stable_seconds = float(
@@ -808,9 +811,10 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
     def _desired_mode(self, temperature: float) -> HVACMode:
         if self._hvac_mode == HVACMode.OFF or self._opening_stage != OPENING_STAGE_NONE:
             return HVACMode.OFF
-        heat_on = temperature <= self._heat_target - self._hysteresis
+        # Start early (small margin), stop late (normal hysteresis).
+        heat_on = temperature <= self._heat_target - self._start_hysteresis
         heat_off = temperature >= self._heat_target + self._hysteresis
-        cool_on = temperature >= self._cool_target + self._hysteresis
+        cool_on = temperature >= self._cool_target + self._start_hysteresis
         cool_off = temperature <= self._cool_target - self._hysteresis
 
         if self._active_mode == HVACMode.HEAT and not heat_off:

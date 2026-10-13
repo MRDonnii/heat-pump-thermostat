@@ -524,3 +524,19 @@ async def test_door_turn_down_to_setpoint_by_default(hass, clock):
     assert pump.target == 22
     await _tick(hass, entity, clock, 12)
     assert pump.state == "off"
+
+
+async def test_starts_just_below_target_and_stops_half_a_degree_above(hass, clock):
+    pump, entity = await _setup(hass, clock, room_temp=23.0)  # target 22 -> idle
+    clock.advance(25)
+    await entity._evaluate("periodic")
+    await hass.async_block_till_done()
+    assert entity.extra_state_attributes["active_mode"] == "off"
+    clock.advance(15)
+    for temp, expected in ((21.95, "off"), (21.9, "heat"), (22.4, "heat"), (22.5, "off")):
+        hass.states.async_set(SENSOR, str(temp), {"unit_of_measurement": "°C"})
+        await hass.async_block_till_done()
+        clock.advance(25)  # past sensor stability, min run and min off
+        await entity._evaluate("periodic")
+        await hass.async_block_till_done()
+        assert entity.extra_state_attributes["active_mode"] == expected, temp
