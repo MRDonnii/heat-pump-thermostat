@@ -81,6 +81,10 @@ MIT
 
 ## Changelog
 
+### 0.4.5
+- Mode changes are confirmed: if the unit does not report the new mode within 10 seconds, the command is sent again (up to 3 times).
+- If the thermostat is heating/cooling but the unit is found in another mode, the mode is resent (`mode_repair`). Fixes a unit staying off after a door/window pause or a release.
+
 ### 0.4.4
 - While heating or cooling, the unit's target is re-compensated every 5 minutes (target + unit sensor − room sensor). Units that regulate on their own, much warmer sensor no longer idle while the room is still below target.
 

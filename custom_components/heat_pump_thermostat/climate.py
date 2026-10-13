@@ -911,6 +911,17 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
                     return
                 await self._restore_thermostats()
             else:
+                pump = self.hass.states.get(self._heat_pump)
+                if (
+                    pump is not None
+                    and pump.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+                    and pump.state != desired.value
+                    and now > self._command_guard_until
+                ):
+                    # We believe the unit runs, but it does not (a command was
+                    # lost or ignored). Send the mode again.
+                    await self._apply_mode(desired, "mode_repair")
+                    return
                 await self._disable_thermostats()
                 if (
                     self._compensate
@@ -997,6 +1008,14 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             return abs(float(pump.attributes.get("temperature")) - self._neutral_target(self._neutral_mode, pump)) < 1
         except (TypeError, ValueError):
             return False
+
+    async def _wait_for_pump_mode(self, mode: HVACMode) -> bool:
+        for _ in range(_TARGET_CONFIRM_SECONDS * 2):
+            pump = self.hass.states.get(self._heat_pump)
+            if pump is not None and pump.state == mode.value:
+                return True
+            await asyncio.sleep(0.5)
+        return False
 
     async def _wait_for_pump_target(self, target: float) -> bool:
         for _ in range(_TARGET_CONFIRM_SECONDS * 2):
@@ -1129,9 +1148,20 @@ class HeatPumpThermostat(ClimateEntity, RestoreEntity):
             else:
                 await self._restore_thermostats()
             return
-        self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
-        await self._pump_call("set_hvac_mode", {"hvac_mode": mode.value})
-        self._command_count_mode += 1
+        for attempt in range(_TARGET_CONFIRM_ATTEMPTS - 1):
+            self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+            await self._pump_call("set_hvac_mode", {"hvac_mode": mode.value})
+            self._command_count_mode += 1
+            self._command_guard_until = time() + _COMMAND_ECHO_SECONDS
+            if await self._wait_for_pump_mode(mode):
+                break
+            _LOGGER.warning(
+                "%s: %s did not switch to %s (attempt %d)",
+                self.entry.title,
+                self._heat_pump,
+                mode.value,
+                attempt + 1,
+            )
         self._last_command = time()
         self._last_command_reason = reason
         self._active_mode = mode

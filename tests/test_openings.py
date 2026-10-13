@@ -35,6 +35,7 @@ class FakePump:
         self.state = "heat"
         self.target = 25.0
         self.internal = 20
+        self.ignore_mode_calls = 0
         self.fan = "auto"
         self.swing = "off"
         self.swing_h = "off"
@@ -90,6 +91,9 @@ class FakePump:
     async def _set_hvac_mode(self, call) -> None:
         if call.data["entity_id"] in (PUMP, [PUMP]):
             self.calls.append(("mode", call.data["hvac_mode"]))
+            if self.ignore_mode_calls:
+                self.ignore_mode_calls -= 1
+                return
             self.state = call.data["hvac_mode"]
             self.publish(call.context)
 
@@ -473,3 +477,33 @@ async def test_unit_target_follows_its_own_warm_sensor_while_heating(hass, clock
     # 22 target + (28 unit - 19 room) = 31, capped at the unit's max (32).
     assert pump.target == 31
     assert entity.extra_state_attributes["last_command_reason"] == "retarget_heat"
+
+
+async def test_restart_after_opening_off_is_confirmed(hass, clock):
+    """The unit ignores the first ON after a door switched it off; it is resent."""
+    pump, entity = await _setup(hass, clock)
+    await _set_door(hass, "on")
+    await _tick(hass, entity, clock, 21)
+    assert pump.state == "off"
+    await _set_door(hass, "off")
+    pump.ignore_mode_calls = 1
+    await _tick(hass, entity, clock, 10.5)
+    await _tick(hass, entity, clock, 0.5)
+    await _tick(hass, entity, clock, 0.5)
+    assert pump.state == "heat"
+    assert sum(1 for c in pump.calls if c == ("mode", "heat")) >= 2
+
+
+async def test_lost_mode_is_repaired_in_steady_state(hass, clock):
+    pump, entity = await _setup(hass, clock)
+    assert entity.extra_state_attributes["active_mode"] == "heat"
+    # Unit drops to off without a trace (e.g. lost command / brown-out), inside
+    # the echo window so it is not taken for a remote-control stop.
+    entity._command_guard_until = clock.now + 60
+    pump.state = "off"
+    pump.publish()
+    await hass.async_block_till_done()
+    assert entity.hvac_mode == "heat"
+    await _tick(hass, entity, clock, 2)
+    assert pump.state == "heat"
+    assert entity.extra_state_attributes["last_command_reason"] == "mode_repair"
